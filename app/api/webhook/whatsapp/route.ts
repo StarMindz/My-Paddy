@@ -4,6 +4,7 @@ import { getSignupState, setSignupState, clearSignupState } from '@/lib/db/signu
 import { createUser } from '@/lib/db/users'
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
 import { extractSignupData } from '@/lib/ai/extract-signup-data'
+import { processUserMessage } from '@/lib/ai/orchestrator'
 import { z } from 'zod'
 
 // GET - Webhook verification
@@ -170,14 +171,21 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Existing user - process message
+    // Existing user - process message with AI
     if (user) {
-      // TODO: Send to AI with tools
-      // For now, send acknowledgment
-      await sendWhatsAppMessage(
-        phoneNumber,
-        'I received your message. AI processing coming soon!'
-      )
+      console.log('[AI] Processing message for user:', user.id)
+      
+      const aiResponse = await processUserMessage(messageText, user.name || undefined)
+      
+      if (aiResponse) {
+        await sendWhatsAppMessage(phoneNumber, aiResponse)
+      } else {
+        // Fallback if AI fails
+        await sendWhatsAppMessage(
+          phoneNumber,
+          'Sorry, I encountered an error processing your message. Please try again.'
+        )
+      }
     }
 
     return NextResponse.json({ status: 'ok' })
