@@ -59,14 +59,8 @@ export async function POST(request: NextRequest) {
     
     console.log('[Webhook] Message from:', message.from, 'Type:', message.type)
 
-    // Validate phone number format (E.164: +[country code][number])
-    const phoneNumberSchema = z.string().regex(/^\+[1-9]\d{1,14}$/)
-    const phoneNumberResult = phoneNumberSchema.safeParse(message.from)
-    if (!phoneNumberResult.success) {
-      console.warn('[Security] Invalid phone number format')
-      return NextResponse.json({ status: 'ok' })
-    }
-    const phoneNumber = phoneNumberResult.data
+    // Use phone number directly from WhatsApp (they send valid numbers)
+    const phoneNumber = message.from.trim()
 
     // Validate message length (prevent DoS)
     const messageText = (message.text?.body || '').trim()
