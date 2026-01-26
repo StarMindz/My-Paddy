@@ -32,8 +32,13 @@ export function getPrismaClient(): PrismaClient {
   }
 
   // Prisma 7 requires an adapter for database connections
-  // Create a PostgreSQL connection pool
-  const pool = new Pool({ connectionString: databaseUrl })
+  // Create a PostgreSQL connection pool with SSL configuration for Supabase
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    ssl: {
+      rejectUnauthorized: false // Supabase uses self-signed certificates
+    }
+  })
   const adapter = new PrismaPg(pool)
 
   // Create PrismaClient with the adapter
