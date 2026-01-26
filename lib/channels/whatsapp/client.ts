@@ -47,10 +47,11 @@ export async function sendWhatsAppMessage(
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
-      console.error('WhatsApp API error:', errorData)
+      const errorMessage = errorData.error?.message || 'Failed to send message'
+      console.error('WhatsApp API error:', errorMessage)
       return {
         success: false,
-        error: errorData.error?.message || 'Failed to send message'
+        error: errorMessage
       }
     }
 

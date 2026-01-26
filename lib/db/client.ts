@@ -14,10 +14,6 @@ export function getPrismaClient(): PrismaClient {
   // DIRECT_URL is only for migrations, not runtime
   const databaseUrl = process.env.DATABASE_URL
   
-  // Log for debugging (remove sensitive data in production)
-  console.log('[Prisma] Checking environment variables...')
-  console.log('[Prisma] DATABASE_URL exists:', !!process.env.DATABASE_URL)
-  
   if (!databaseUrl) {
     throw new Error(
       'Missing DATABASE_URL environment variable. ' +

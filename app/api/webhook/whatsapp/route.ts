@@ -25,17 +25,25 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     
-    // Log incoming webhook for debugging
-    console.log('📥 Webhook received:', JSON.stringify(body, null, 2))
+    // Log webhook received
+    console.log('[Webhook] POST received')
+    console.log('[Webhook] Body structure:', {
+      hasEntry: !!body.entry,
+      entryLength: body.entry?.length,
+      hasChanges: !!body.entry?.[0]?.changes,
+      changesLength: body.entry?.[0]?.changes?.length,
+      field: body.entry?.[0]?.changes?.[0]?.field
+    })
     
     // Parse WhatsApp message
     const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]
     if (!message) {
-      console.log('⚠️ No message found in webhook payload')
+      console.log('[Webhook] No message in payload - might be status update or other event')
+      // Still return 200 to acknowledge receipt
       return NextResponse.json({ status: 'ok' })
     }
     
-    console.log('✅ Message parsed:', { from: message.from, text: message.text?.body })
+    console.log('[Webhook] Message from:', message.from, 'Type:', message.type)
 
     const phoneNumber = message.from
     const messageText = message.text?.body || ''
@@ -120,7 +128,6 @@ export async function POST(request: NextRequest) {
         phoneNumber,
         'I received your message. AI processing coming soon!'
       )
-      console.log('Processing message from user:', user.id, messageText)
     }
 
     return NextResponse.json({ status: 'ok' })
