@@ -31,8 +31,13 @@ export function getPrismaClient(): PrismaClient {
   }
 
   // Prisma 7 requires an adapter for database connections
-  // According to official docs: PrismaPg accepts { connectionString } directly
-  const adapter = new PrismaPg({ connectionString: databaseUrl })
+  // PrismaPg accepts pg.PoolConfig which allows SSL configuration
+  const adapter = new PrismaPg({
+    connectionString: databaseUrl,
+    ssl: {
+      rejectUnauthorized: false // Supabase uses self-signed certificates
+    }
+  })
   const client = new PrismaClient({ adapter })
   
   if (process.env.NODE_ENV !== 'production') {
