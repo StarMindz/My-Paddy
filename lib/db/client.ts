@@ -10,34 +10,32 @@ export function getPrismaClient(): PrismaClient {
     return globalForPrisma.prisma
   }
 
-  // Get DATABASE_URL from environment
-  const databaseUrl = process.env.DATABASE_URL || process.env.DIRECT_URL
+  // Get DATABASE_URL from environment (runtime connection)
+  // DIRECT_URL is only for migrations, not runtime
+  const databaseUrl = process.env.DATABASE_URL
   
   // Log for debugging (remove sensitive data in production)
   console.log('[Prisma] Checking environment variables...')
   console.log('[Prisma] DATABASE_URL exists:', !!process.env.DATABASE_URL)
-  console.log('[Prisma] DIRECT_URL exists:', !!process.env.DIRECT_URL)
-  console.log('[Prisma] databaseUrl resolved:', !!databaseUrl)
   
   if (!databaseUrl) {
-    const missingVars = []
-    if (!process.env.DATABASE_URL) missingVars.push('DATABASE_URL')
-    if (!process.env.DIRECT_URL) missingVars.push('DIRECT_URL')
-    
     throw new Error(
-      `Missing required environment variables: ${missingVars.join(', ')}. ` +
-      `Please set DATABASE_URL or DIRECT_URL in your Vercel environment variables.`
+      'Missing DATABASE_URL environment variable. ' +
+      'Set it in Vercel environment variables. Use DIRECT_URL for migrations only.'
     )
   }
 
+  // Fix SSL in connection string (per pg-connection-string warning)
+  // Connection string params override ssl object, so fix it in the URL
+  // Add uselibpqcompat=true&sslmode=require to avoid verify-full behavior
+  const urlObj = new URL(databaseUrl)
+  urlObj.searchParams.set('uselibpqcompat', 'true')
+  urlObj.searchParams.set('sslmode', 'require')
+  const fixedDatabaseUrl = urlObj.toString()
+
   // Prisma 7 requires an adapter for database connections
-  // PrismaPg accepts pg.PoolConfig which allows SSL configuration
-  const adapter = new PrismaPg({
-    connectionString: databaseUrl,
-    ssl: {
-      rejectUnauthorized: false // Supabase uses self-signed certificates
-    }
-  })
+  // Connection string SSL params override ssl object, so fix in URL
+  const adapter = new PrismaPg({ connectionString: fixedDatabaseUrl })
   const client = new PrismaClient({ adapter })
   
   if (process.env.NODE_ENV !== 'production') {
