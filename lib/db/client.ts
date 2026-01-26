@@ -12,6 +12,12 @@ export function getPrismaClient(): PrismaClient {
   // Get DATABASE_URL from environment
   const databaseUrl = process.env.DATABASE_URL || process.env.DIRECT_URL
   
+  // Log for debugging (remove sensitive data in production)
+  console.log('[Prisma] Checking environment variables...')
+  console.log('[Prisma] DATABASE_URL exists:', !!process.env.DATABASE_URL)
+  console.log('[Prisma] DIRECT_URL exists:', !!process.env.DIRECT_URL)
+  console.log('[Prisma] databaseUrl resolved:', !!databaseUrl)
+  
   if (!databaseUrl) {
     const missingVars = []
     if (!process.env.DATABASE_URL) missingVars.push('DATABASE_URL')
@@ -25,11 +31,13 @@ export function getPrismaClient(): PrismaClient {
 
   // Ensure DATABASE_URL is set in process.env for Prisma 7 to read
   // This is needed for serverless environments like Vercel
-  if (!process.env.DATABASE_URL && process.env.DIRECT_URL) {
-    process.env.DATABASE_URL = process.env.DIRECT_URL
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = databaseUrl
+    console.log('[Prisma] Set DATABASE_URL from DIRECT_URL')
   }
 
-
+  // Prisma 7 requires DATABASE_URL to be in process.env when PrismaClient is instantiated
+  // Create client - it will read from process.env.DATABASE_URL
   const client = new PrismaClient()
   
   if (process.env.NODE_ENV !== 'production') {
