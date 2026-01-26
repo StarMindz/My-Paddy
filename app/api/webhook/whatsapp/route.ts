@@ -3,6 +3,8 @@ import { getUserByPhone } from '@/lib/db/users'
 import { getSignupState, setSignupState, clearSignupState } from '@/lib/db/signup-states'
 import { createUser } from '@/lib/db/users'
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
+import { extractSignupData } from '@/lib/ai/extract-signup-data'
+import { z } from 'zod'
 
 // GET - Webhook verification
 export async function GET(request: NextRequest) {
@@ -57,8 +59,24 @@ export async function POST(request: NextRequest) {
     
     console.log('[Webhook] Message from:', message.from, 'Type:', message.type)
 
-    const phoneNumber = message.from
-    const messageText = message.text?.body || ''
+    // Validate phone number format (E.164: +[country code][number])
+    const phoneNumberSchema = z.string().regex(/^\+[1-9]\d{1,14}$/)
+    const phoneNumberResult = phoneNumberSchema.safeParse(message.from)
+    if (!phoneNumberResult.success) {
+      console.warn('[Security] Invalid phone number format')
+      return NextResponse.json({ status: 'ok' })
+    }
+    const phoneNumber = phoneNumberResult.data
+
+    // Validate message length (prevent DoS)
+    const messageText = (message.text?.body || '').trim()
+    if (messageText.length > 1000) {
+      await sendWhatsAppMessage(
+        phoneNumber,
+        'Your message is too long. Please keep it under 1000 characters.'
+      )
+      return NextResponse.json({ status: 'ok' })
+    }
 
     // Get or create user
     let user = await getUserByPhone(phoneNumber)
@@ -81,9 +99,22 @@ export async function POST(request: NextRequest) {
 
       // Continue signup flow
       if (signupState.step === 'email') {
-        // Validate email
+        // Try AI extraction first, fallback to direct validation
+        let extractedEmail: string | null = null
+        
+        // First try direct validation (faster, no AI cost)
         if (isValidEmail(messageText)) {
-          await setSignupState(phoneNumber, 'name', { email: messageText })
+          extractedEmail = messageText
+        } else {
+          // Use AI to extract email from natural language
+          extractedEmail = await extractSignupData(messageText, 'email')
+        }
+
+        // Validate email format using Zod
+        const emailSchema = z.string().email().max(254).transform(val => val.toLowerCase().trim())
+        const emailResult = emailSchema.safeParse(extractedEmail)
+        if (emailResult.success) {
+          await setSignupState(phoneNumber, 'name', { email: emailResult.data })
           await sendWhatsAppMessage(
             phoneNumber,
             'Perfect! What\'s your name?'
@@ -92,43 +123,56 @@ export async function POST(request: NextRequest) {
         } else {
           await sendWhatsAppMessage(
             phoneNumber,
-            'That doesn\'t look like a valid email address. Please try again:\n\n' +
-            'Example: yourname@example.com'
+            'I couldn\'t find a valid email address in your message. Please try again:\n\n' +
+            'Example: "my email is yourname@example.com" or just "yourname@example.com"'
           )
           return NextResponse.json({ status: 'ok' })
         }
       }
 
       if (signupState.step === 'name') {
-        // Create user
-        const userName = messageText.trim()
-        if (!userName || userName.length < 2) {
+        // Always use AI extraction for names since natural language is too varied
+        // Users might say "My name is Stanley", "I'm John", "Stanley", "call me Stan", etc.
+        // AI handles all these cases reliably without hardcoding patterns
+        const extractedName = await extractSignupData(messageText, 'name')
+
+        // Validate name using Zod (length 2-100, no control characters)
+        const nameSchema = z.string().min(2).max(100).trim().refine(
+          (val) => !/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(val),
+          { message: 'Name contains invalid characters' }
+        )
+        const nameResult = nameSchema.safeParse(extractedName)
+        
+        if (nameResult.success) {
+          const userName = nameResult.data
+          
+          const signupData = signupState.data as { email?: string } | null
+          user = await createUser({
+            phone_number: phoneNumber,
+            email: signupData?.email || '',
+            name: userName
+          })
+          await clearSignupState(phoneNumber)
+          
           await sendWhatsAppMessage(
             phoneNumber,
-            'Please provide a valid name (at least 2 characters).'
+            `🎉 Welcome ${userName}! You're all set.\n\n` +
+            `I'm your AI assistant and I can help you with:\n` +
+            `• Create calendar events\n` +
+            `• Send emails\n` +
+            `• Manage tasks\n` +
+            `• And much more!\n\n` +
+            `Try: "Create a meeting for Friday 5pm"`
+          )
+          return NextResponse.json({ status: 'ok' })
+        } else {
+          await sendWhatsAppMessage(
+            phoneNumber,
+            'I couldn\'t find a valid name in your message. Please try again:\n\n' +
+            'Example: "my name is Stanley" or just "Stanley"'
           )
           return NextResponse.json({ status: 'ok' })
         }
-
-        const signupData = signupState.data as { email?: string } | null
-        user = await createUser({
-          phone_number: phoneNumber,
-          email: signupData?.email || '',
-          name: userName
-        })
-        await clearSignupState(phoneNumber)
-        
-        await sendWhatsAppMessage(
-          phoneNumber,
-          `🎉 Welcome ${userName}! You're all set.\n\n` +
-          `I'm your AI assistant and I can help you with:\n` +
-          `• Create calendar events\n` +
-          `• Send emails\n` +
-          `• Manage tasks\n` +
-          `• And much more!\n\n` +
-          `Try: "Create a meeting for Friday 5pm"`
-        )
-        return NextResponse.json({ status: 'ok' })
       }
     }
 
@@ -150,5 +194,5 @@ export async function POST(request: NextRequest) {
 }
 
 function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  return z.string().email().safeParse(email).success
 }
