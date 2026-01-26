@@ -1,4 +1,6 @@
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
+import { Pool } from 'pg'
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
@@ -29,16 +31,13 @@ export function getPrismaClient(): PrismaClient {
     )
   }
 
-  // Ensure DATABASE_URL is set in process.env for Prisma 7 to read
-  // This is needed for serverless environments like Vercel
-  if (!process.env.DATABASE_URL) {
-    process.env.DATABASE_URL = databaseUrl
-    console.log('[Prisma] Set DATABASE_URL from DIRECT_URL')
-  }
+  // Prisma 7 requires an adapter for database connections
+  // Create a PostgreSQL connection pool
+  const pool = new Pool({ connectionString: databaseUrl })
+  const adapter = new PrismaPg(pool)
 
-  // Prisma 7 requires DATABASE_URL to be in process.env when PrismaClient is instantiated
-  // Create client - it will read from process.env.DATABASE_URL
-  const client = new PrismaClient()
+  // Create PrismaClient with the adapter
+  const client = new PrismaClient({ adapter })
   
   if (process.env.NODE_ENV !== 'production') {
     globalForPrisma.prisma = client
