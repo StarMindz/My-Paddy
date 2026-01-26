@@ -1,0 +1,64 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id               String   @id @default(uuid())
+  phoneNumber      String   @unique @map("phone_number")
+  email            String
+  name             String?
+  subscriptionTier String   @default("free") @map("subscription_tier")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  appConnections AppConnection[]
+  subscriptions Subscription[]
+
+  @@map("users")
+}
+
+model AppConnection {
+  id                    String   @id @default(uuid())
+  userId                String   @map("user_id")
+  appName               String   @map("app_name")
+  pipedreamConnectionId String?  @map("pipedream_connection_id")
+  connectedAt           DateTime @default(now()) @map("connected_at")
+  active                 Boolean  @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, appName])
+  @@map("app_connections")
+}
+
+model Subscription {
+  id                     String    @id @default(uuid())
+  userId                 String    @map("user_id")
+  provider               String?
+  providerSubscriptionId String?  @map("provider_subscription_id")
+  tier                   String
+  status                 String    @default("active")
+  currentPeriodEnd       DateTime? @map("current_period_end")
+  createdAt              DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model SignupState {
+  phoneNumber String   @id @map("phone_number")
+  step        String
+  data        Json?
+  expiresAt   DateTime @map("expires_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("signup_states")
+}
