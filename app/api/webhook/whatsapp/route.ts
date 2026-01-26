@@ -11,12 +11,24 @@ export async function GET(request: NextRequest) {
   const token = searchParams.get('hub.verify_token')
   const challenge = searchParams.get('hub.challenge')
 
+  console.log('[Webhook] GET verification attempt:', {
+    mode,
+    hasToken: !!token,
+    hasChallenge: !!challenge,
+    verifyTokenSet: !!process.env.WHATSAPP_VERIFY_TOKEN
+  })
+
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN
 
   if (mode === 'subscribe' && token === verifyToken) {
+    console.log('[Webhook] Verification successful')
     return new Response(challenge, { status: 200 })
   }
 
+  console.log('[Webhook] Verification failed:', {
+    modeMatch: mode === 'subscribe',
+    tokenMatch: token === verifyToken
+  })
   return new Response('Forbidden', { status: 403 })
 }
 
