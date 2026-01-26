@@ -25,11 +25,17 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     
+    // Log incoming webhook for debugging
+    console.log('📥 Webhook received:', JSON.stringify(body, null, 2))
+    
     // Parse WhatsApp message
     const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]
     if (!message) {
+      console.log('⚠️ No message found in webhook payload')
       return NextResponse.json({ status: 'ok' })
     }
+    
+    console.log('✅ Message parsed:', { from: message.from, text: message.text?.body })
 
     const phoneNumber = message.from
     const messageText = message.text?.body || ''
