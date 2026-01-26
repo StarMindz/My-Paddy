@@ -1,6 +1,5 @@
 import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
-import { Pool } from 'pg'
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
@@ -32,16 +31,8 @@ export function getPrismaClient(): PrismaClient {
   }
 
   // Prisma 7 requires an adapter for database connections
-  // Create a PostgreSQL connection pool with SSL configuration for Supabase
-  const pool = new Pool({
-    connectionString: databaseUrl,
-    ssl: {
-      rejectUnauthorized: false // Supabase uses self-signed certificates
-    }
-  })
-  const adapter = new PrismaPg(pool)
-
-  // Create PrismaClient with the adapter
+  // According to official docs: PrismaPg accepts { connectionString } directly
+  const adapter = new PrismaPg({ connectionString: databaseUrl })
   const client = new PrismaClient({ adapter })
   
   if (process.env.NODE_ENV !== 'production') {
