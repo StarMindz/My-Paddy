@@ -4,7 +4,7 @@ import { getSignupState, setSignupState, clearSignupState } from '@/lib/db/signu
 import { createUser } from '@/lib/db/users'
 import { getOrCreateConversation, getConversationWithMessages } from '@/lib/db/conversations'
 import { saveUserMessage, saveAssistantMessage } from '@/lib/db/messages'
-import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
+import { sendWhatsAppMessage, sendTypingIndicator } from '@/lib/channels/whatsapp/client'
 import { extractSignupData } from '@/lib/ai/extract-signup-data'
 import { processUserMessage } from '@/lib/ai/orchestrator'
 import { z } from 'zod'
@@ -64,6 +64,7 @@ export async function POST(request: NextRequest) {
 
     // Use phone number directly from WhatsApp (they send valid numbers)
     const phoneNumber = message.from.trim()
+    const incomingMessageId: string | undefined = typeof message.id === 'string' ? message.id : undefined
 
     // Validate message length (prevent DoS)
     const messageText = (message.text?.body || '').trim()
@@ -176,6 +177,14 @@ export async function POST(request: NextRequest) {
     // Existing user - process message with AI (with conversation memory)
     if (user) {
       console.log('[AI] Processing message for user:', user.id)
+      
+      // Show typing indicator while we process the message.
+      // This uses the official WhatsApp Cloud API typing indicator
+      // and will be dismissed automatically when we send a reply
+      // or after ~25 seconds.
+      if (incomingMessageId) {
+        await sendTypingIndicator(incomingMessageId)
+      }
       
       // Get or create conversation
       const conversation = await getOrCreateConversation(user.id)
