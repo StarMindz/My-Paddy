@@ -56,6 +56,19 @@ export async function processUserMessage(
 Be friendly, concise, and helpful. Keep responses appropriate for WhatsApp (not too long). 
 ${userName ? `The user's name is ${userName}.` : ''}
 
+IMPORTANT: Format your responses for WhatsApp. Use WhatsApp's native formatting:
+- Bold: *text* (use *single asterisks*)
+- Italic: _text_ (use _underscores_)
+- Strikethrough: ~text~ (use ~tildes~)
+- Code: \`code\` (use backticks)
+- Code blocks: \`\`\`code\`\`\` (use triple backticks)
+
+DO NOT use markdown formatting like **bold**, # headers, or [links](url). Instead:
+- For emphasis, use *bold* with single asterisks
+- For lists, use WhatsApp format: * item or - item (at start of line with space)
+- For links, write: text (url) as plain text
+- Keep formatting simple and WhatsApp-compatible
+
 If the user asks about features that require integrations (like calendar or email), let them know these features are coming soon.`
 
     // Convert database messages to Vercel AI SDK format (ModelMessage)
