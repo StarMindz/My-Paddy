@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserByPhone } from '@/lib/db/users'
 import { getSignupState, setSignupState, clearSignupState } from '@/lib/db/signup-states'
 import { createUser } from '@/lib/db/users'
+import { getOrCreateConversation, getConversationWithMessages } from '@/lib/db/conversations'
+import { saveUserMessage, saveAssistantMessage } from '@/lib/db/messages'
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
 import { extractSignupData } from '@/lib/ai/extract-signup-data'
 import { processUserMessage } from '@/lib/ai/orchestrator'
@@ -171,14 +173,38 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Existing user - process message with AI
+    // Existing user - process message with AI (with conversation memory)
     if (user) {
       console.log('[AI] Processing message for user:', user.id)
       
-      const aiResponse = await processUserMessage(messageText, user.name || undefined)
+      // Get or create conversation
+      const conversation = await getOrCreateConversation(user.id)
       
-      if (aiResponse) {
-        await sendWhatsAppMessage(phoneNumber, aiResponse)
+      // Get conversation history (last 20 messages)
+      const conversationWithHistory = await getConversationWithMessages(user.id, 20)
+      const messageHistory = conversationWithHistory?.messages || []
+      
+      // Save user message to database
+      await saveUserMessage(conversation.id, messageText)
+      
+      // Process with AI (includes conversation history)
+      const aiResult = await processUserMessage(
+        messageText,
+        user.id,
+        messageHistory,
+        user.name || undefined
+      )
+      
+      if (aiResult && aiResult.response) {
+        // Save assistant response to database
+        await saveAssistantMessage(
+          conversation.id,
+          aiResult.response,
+          aiResult.toolCalls
+        )
+        
+        // Send response to WhatsApp
+        await sendWhatsAppMessage(phoneNumber, aiResult.response)
       } else {
         // Fallback if AI fails
         await sendWhatsAppMessage(

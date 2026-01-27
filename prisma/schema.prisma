@@ -20,6 +20,7 @@ model User {
 
   appConnections AppConnection[]
   subscriptions Subscription[]
+  conversation   Conversation?
 
   @@map("users")
 }
@@ -61,4 +62,32 @@ model SignupState {
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("signup_states")
+}
+
+model Conversation {
+  id        String   @id @default(uuid())
+  userId    String   @unique @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String       @map("conversation_id")
+  role           String       // "user" | "assistant" | "tool" | "system"
+  content        String?      // nullable for assistant messages with only tool calls
+  toolCalls      Json?        // Store tool calls array for assistant messages
+  toolCallId     String?      // For tool result messages (matches toolCallId from toolCalls)
+  toolName       String?      // For tool result messages
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
 }
