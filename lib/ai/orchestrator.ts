@@ -1,4 +1,4 @@
-import { generateText, tool } from 'ai'
+import { generateText, tool, jsonSchema } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import type { ModelMessage } from '@ai-sdk/provider-utils'
 import { z } from 'zod'
@@ -76,6 +76,20 @@ ${userName ? `The user's name is ${userName}.` : ''}
 ${toolDescriptions
   ? `## Available Tools (user has these apps connected)\n\n${toolDescriptions}\n\nWhen the user requests an action (e.g. "send an email to X", "create a meeting tomorrow"), use the appropriate tool above and confirm what you did.`
   : ''}${connectionInstruction}${!toolDescriptions && !hasConnectionTool ? `\n\nTo use features like calendar or email, users need to connect their accounts first. If they ask about these features, offer to send them a connection link.` : ''}
+
+## Tool Parameters (MANDATORY)
+
+- NEVER call any tool with an empty payload {}. Every required parameter must be filled.
+- Crosscheck tool parameters against the tool's schema before calling; do not make mistakes in the parameters.
+- If a tool requires specific information (like an email address, subject, or body), ensure you have gathered that from the user or the conversation history before calling the tool.
+
+## Proactive Behavior
+
+- Do NOT ask the user for "exact fields" once you have the basic details. Build the tool parameters yourself and call the tool immediately.
+- After a clear "yes", "send", "go ahead", or "confirm" from the user, call the tool once with the full parameters. Do not ask for confirmation again.
+- Take initiative. If you have a plan, execute it or present it clearly. Don't frustrate the user with redundant questions.
+- If you need information to complete a task, ask for it all at once rather than one by one.
+- Once you have enough information to form a plan, tell the user the plan and ask for a final "Go ahead" before executing sensitive actions like sending an email or deleting something.
 
 ## Formatting
 
@@ -165,11 +179,10 @@ Keep responses short and friendly.`
           })
           continue
         }
-        const zodSchema = z.object({}).passthrough()
         const toolDefinition = {
           description: toolDef.description || `Execute ${toolName}`,
-          inputSchema: zodSchema,
-          execute: async (params: z.infer<typeof zodSchema>) => {
+          inputSchema: jsonSchema(toolDef.inputSchema),
+          execute: async (params: any) => {
             if (!phoneNumber) {
               return 'Error: Phone number required for tool execution'
             }
