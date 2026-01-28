@@ -6,8 +6,8 @@ const PIPEDREAM_MCP_SERVER_URL = 'https://remote.mcp.pipedream.net'
 // Load at runtime so webpack does not resolve at build time (fixes Vercel "Module not found").
 async function loadMcpSdk() {
   const [sdk, transportModule] = await Promise.all([
-    import(/* webpackIgnore: true */ '@modelcontextprotocol/sdk'),
-    import(/* webpackIgnore: true */ '@modelcontextprotocol/sdk/client/streamableHttp.js'),
+    import('@modelcontextprotocol/sdk'),
+    import('@modelcontextprotocol/sdk/client/streamableHttp.js'),
   ])
   return { Client: sdk.Client, StreamableHTTPClientTransport: transportModule.StreamableHTTPClientTransport }
 }
