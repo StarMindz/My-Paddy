@@ -1,8 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // So Next.js can resolve and bundle @modelcontextprotocol/sdk (ESM package used in API routes)
-  transpilePackages: ['@modelcontextprotocol/sdk'],
+  // Next.js 14: opt out of bundling so Route Handlers use Node require() instead of webpack resolving the package.
+  // https://nextjs.org/docs/14/app/api-reference/next-config-js/serverComponentsExternalPackages
+  experimental: {
+    serverComponentsExternalPackages: ['@modelcontextprotocol/sdk'],
+  },
 }
 
 module.exports = nextConfig
