@@ -10,7 +10,14 @@ import { extractSignupData } from '@/lib/ai/extract-signup-data'
 import { processUserMessage } from '@/lib/ai/orchestrator'
 import { initializePipedreamMCP } from '@/lib/mcp/pipedream-client'
 import { executePipedreamTool } from '@/lib/mcp/tool-executor'
+import { createAndSendConnectLink } from '@/lib/connect/send-connect-link'
 import { z } from 'zod'
+
+/** Tools the AI can use: MCP tools from connected apps + send_connection_link when user asks to do something but isn't connected */
+const SEND_CONNECTION_LINK_TOOL = {
+  description: 'Send the user a link to connect an app (e.g. Gmail, Google Calendar). Use when they ask to do something (send email, create event) but have not connected that app yet. appName: gmail (email), google_calendar (calendar), slack (Slack).',
+  isConnectionTool: true as const,
+}
 
 // GET - Webhook verification
 export async function GET(request: NextRequest) {
@@ -263,9 +270,10 @@ async function processUserMessageAsync(
     await saveUserMessage(conversation.id, messageText)
     
     // Initialize Pipedream MCP and get tools
-    // Use phone number as externalUserId (Pipedream accepts any string!)
     const { tools: mcpTools, cleanup: cleanupMCP } = await initializePipedreamMCP(userId, phoneNumber)
-    
+    // Always add send_connection_link so the AI can offer a link when user asks to do something but isn't connected
+    const toolsForAi = { ...mcpTools, send_connection_link: SEND_CONNECTION_LINK_TOOL }
+
     try {
       // Process with AI (includes conversation history and tools)
       let aiResult = await processUserMessage(
@@ -273,8 +281,8 @@ async function processUserMessageAsync(
         userId,
         messageHistory,
         userName,
-        mcpTools,
-        phoneNumber // Pass phone number for Pipedream externalUserId
+        toolsForAi,
+        phoneNumber
       )
       
       // Handle tool calls if any
@@ -287,32 +295,37 @@ async function processUserMessageAsync(
         
         for (const toolCall of aiResult.toolCalls) {
           try {
-            // Get appName from tool definition (stored when tools were retrieved)
-            const toolDef = mcpTools[toolCall.toolName]
-            const appName = toolDef?.appName
-            
-            // Execute tool via MCP
-            // Use phone number as externalUserId for Pipedream
-            const toolResult = await executePipedreamTool(
-              userId,
-              phoneNumber,
-              toolCall.toolName,
-              toolCall.args,
-              appName
-            )
-            
-            // Save tool result to database
+            let toolResultText: string
+            if (toolCall.toolName === 'send_connection_link') {
+              // User asked to do something (e.g. send email) but isn't connected; AI called send_connection_link
+              const appName = (toolCall.args?.appName ?? '').toString().trim() || 'gmail'
+              const linkResult = await createAndSendConnectLink(phoneNumber, appName)
+              toolResultText = linkResult.success
+                ? `Connection link for ${appName} sent to the user on WhatsApp.`
+                : `Failed to send link: ${linkResult.error ?? 'Unknown error'}`
+            } else {
+              const toolDef = mcpTools[toolCall.toolName]
+              const appName = toolDef?.appName
+              const toolResult = await executePipedreamTool(
+                userId,
+                phoneNumber,
+                toolCall.toolName,
+                toolCall.args,
+                appName
+              )
+              toolResultText = toolResult.error || toolResult.result || 'Tool executed'
+            }
+
             await saveToolMessage(
               conversation.id,
               toolCall.toolCallId,
               toolCall.toolName,
-              toolResult.error || toolResult.result || 'Tool executed'
+              toolResultText
             )
-            
             toolResults.push({
               toolCallId: toolCall.toolCallId,
               toolName: toolCall.toolName,
-              result: toolResult.error || toolResult.result || 'Tool executed'
+              result: toolResultText
             })
           } catch (error) {
             console.error(`[AI] Error executing tool ${toolCall.toolName}:`, error)
@@ -324,19 +337,16 @@ async function processUserMessageAsync(
             )
           }
         }
-        
-        // Get updated conversation history with tool results
+
         const updatedHistory = await getConversationWithMessages(userId, 20)
         const updatedMessageHistory = updatedHistory?.messages || []
-        
-        // Process again with tool results to get final response
         aiResult = await processUserMessage(
           messageText,
           userId,
           updatedMessageHistory,
           userName,
-          mcpTools,
-          phoneNumber // Pass phone number for Pipedream externalUserId
+          toolsForAi,
+          phoneNumber
         )
       }
       

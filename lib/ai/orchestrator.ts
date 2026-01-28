@@ -50,22 +50,31 @@ export async function processUserMessage(
     })
 
     // Build system prompt - simple and clear
-    const toolDescriptions = tools && Object.keys(tools).length > 0
-      ? Object.entries(tools)
-          .map(([toolName, toolDef]) => {
-            const cleanName = toolName.replace(/^pd_/, '') // Remove pd_ prefix for display
-            return `- ${cleanName}: ${toolDef.description || 'Available tool'}`
-          })
-          .join('\n')
-      : null
+    const hasConnectionTool = tools && 'send_connection_link' in tools
+    const mcpToolEntries = tools
+      ? Object.entries(tools).filter(([name]) => name !== 'send_connection_link')
+      : []
+    const toolDescriptions =
+      mcpToolEntries.length > 0
+        ? mcpToolEntries
+            .map(([toolName, toolDef]) => {
+              const cleanName = toolName.replace(/^pd_/, '')
+              return `- ${cleanName}: ${toolDef.description || 'Available tool'}`
+            })
+            .join('\n')
+        : null
+
+    const connectionInstruction = hasConnectionTool
+      ? `\n\n## When the user is NOT connected\nYou have a tool \`send_connection_link\` with parameter \`appName\` (app slug). Use it when the user asks to do something that requires an app they have not connected yet (e.g. "send an email" → use appName \`gmail\`; "create a calendar event" or "add a meeting" → use \`google_calendar\`; Slack → \`slack\`). After calling it, tell them you sent a link to connect and they can try their request again after connecting. Do not ask them to "say connect gmail"—just call the tool and send the link.`
+      : ''
 
     const systemPrompt = `You are My Padi, a helpful AI assistant on WhatsApp. You help users with tasks like creating calendar events, sending emails, and managing their productivity.
 
 ${userName ? `The user's name is ${userName}.` : ''}
 
-${toolDescriptions 
-  ? `## Available Tools\n\n${toolDescriptions}\n\nWhen a user requests an action, use the appropriate tool automatically. Confirm what you did after completing the action.` 
-  : `To use features like calendar events or emails, users need to connect their accounts first. If they ask about these features, offer to send them a connection link.`}
+${toolDescriptions
+  ? `## Available Tools (user has these apps connected)\n\n${toolDescriptions}\n\nWhen the user requests an action (e.g. "send an email to X", "create a meeting tomorrow"), use the appropriate tool above and confirm what you did.`
+  : ''}${connectionInstruction}${!toolDescriptions && !hasConnectionTool ? `\n\nTo use features like calendar or email, users need to connect their accounts first. If they ask about these features, offer to send them a connection link.` : ''}
 
 ## Formatting
 
@@ -138,31 +147,33 @@ Keep responses short and friendly.`
       content: trimmedMessage
     })
 
-    // Convert MCP tools to Vercel AI SDK tool format
-    // Note: MCP tools use JSON Schema, we'll use a simple Zod object schema
+    // Convert tools to Vercel AI SDK tool format
+    // MCP tools: execute via Pipedream. send_connection_link: executed in webhook, schema only here
     const aiTools: Record<string, any> = {}
     if (tools) {
       for (const [toolName, toolDef] of Object.entries(tools)) {
-        // Create a simple Zod schema from JSON Schema (simplified approach)
-        // For production, you'd want a proper JSON Schema to Zod converter
-        const zodSchema = z.object({}).passthrough() // Accept any object for now
-        
-        // Create tool with proper typing
-        // toolDef.appName is stored when tools are retrieved from MCP
+        if (toolDef.isConnectionTool) {
+          // send_connection_link: AI calls it; webhook executes it (createAndSendConnectLink)
+          const connectionSchema = z.object({ appName: z.string().describe('App slug: gmail (email), google_calendar (calendar), slack (Slack), etc.') })
+          aiTools[toolName] = tool({
+            description: toolDef.description || 'Send the user a link to connect an app.',
+            inputSchema: connectionSchema,
+            execute: async (_params: z.infer<typeof connectionSchema>) => 'Connection link will be sent by the system.'
+          })
+          continue
+        }
+        const zodSchema = z.object({}).passthrough()
         const toolDefinition = {
           description: toolDef.description || `Execute ${toolName}`,
           inputSchema: zodSchema,
           execute: async (params: z.infer<typeof zodSchema>) => {
-            // Execute tool via MCP
-            // Pass appName if available (stored when tool was retrieved)
-            // Use phoneNumber as externalUserId for Pipedream
             if (!phoneNumber) {
               return 'Error: Phone number required for tool execution'
             }
             const result = await executePipedreamTool(
               userId,
               phoneNumber,
-              toolName, 
+              toolName,
               params as Record<string, any>,
               toolDef.appName
             )
@@ -172,7 +183,6 @@ Keep responses short and friendly.`
             return result.result || 'Tool executed successfully'
           }
         }
-        
         aiTools[toolName] = tool(toolDefinition)
       }
     }

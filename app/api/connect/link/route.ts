@@ -1,89 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPipedreamClient } from '@/lib/mcp/pipedream-auth'
-import { getUserByPhone } from '@/lib/db/users'
 import { getPrismaClient } from '@/lib/db/client'
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
+import { createAndSendConnectLink } from '@/lib/connect/send-connect-link'
 
 /**
- * Generate Connect Link for WhatsApp users to connect their apps
- * 
- * Flow:
- * 1. User sends message like "connect gmail" or "connect my calendar"
- * 2. This endpoint generates a Connect Link URL
- * 3. Send URL to user via WhatsApp
- * 4. User clicks link, completes OAuth on Pipedream
- * 5. Pipedream webhook (if configured) notifies us, or we poll for connection
- * 
- * POST /api/connect/link
- * Body: { phoneNumber: string, appName: string }
+ * Handle webhook from Pipedream when user connects an account.
+ * Pipedream sends POST to the webhook_uri you pass when creating the Connect token (no UI setting).
+ * Payload: { event: "CONNECTION_SUCCESS"|"CONNECTION_ERROR", account: { id, external_id, app: { name_slug } } }
  */
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json()
-    const { phoneNumber, appName } = body
+async function handleConnectionWebhook(body: any): Promise<NextResponse> {
+  // Pipedream format: event + account.id, account.external_id, account.app.name_slug
+  const event = body.event
+  const account = body.account
+  const phoneNumber = account?.external_id ?? body.external_user_id
+  const accountId = account?.id ?? body.account_id
+  const app = account?.app?.name_slug ?? body.app
+  const status = event === 'CONNECTION_SUCCESS' ? 'connected' : event === 'CONNECTION_ERROR' ? 'error' : body.status
 
-    if (!phoneNumber || !appName) {
-      return NextResponse.json(
-        { error: 'phoneNumber and appName are required' },
-        { status: 400 }
-      )
-    }
-
-    // Initialize Pipedream client
-    const pipedreamClient = getPipedreamClient()
-
-    // Generate Connect token using phone number directly as externalUserId
-    // Pipedream accepts ANY string as externalUserId - phone numbers work perfectly!
-    const tokenResponse = await pipedreamClient.createConnectToken({
-      external_user_id: phoneNumber, // Use phone number directly
-    })
-
-    // Build Connect Link URL with app parameter
-    // Format: https://pipedream.com/_static/connect.html?token={token}&connectLink=true&app={appName}
-    const connectLink = `${tokenResponse.connect_link_url}&app=${encodeURIComponent(appName)}`
-
-    // Send link to user via WhatsApp
-    await sendWhatsAppMessage(
-      phoneNumber,
-      `🔗 Connect your ${appName} account:\n\n${connectLink}\n\n` +
-      `Click this link to securely connect your account. The link expires in 4 hours.`
-    )
-
-    return NextResponse.json({
-      success: true,
-      connectLink,
-      message: 'Connect link sent to user'
-    })
-  } catch (error) {
-    console.error('[Connect] Error generating link:', error)
+  if (!phoneNumber || !accountId || !app) {
     return NextResponse.json(
-      { error: 'Failed to generate connect link' },
-      { status: 500 }
+      { error: 'Missing required fields (account.external_id, account.id, account.app.name_slug or legacy fields)' },
+      { status: 400 }
     )
   }
-}
-
-/**
- * Handle webhook from Pipedream when user connects an account
- * Configure this URL in Pipedream project settings: PUT /api/connect/link
- */
-export async function PUT(request: NextRequest) {
-  try {
-    const body = await request.json()
-    
-    // Pipedream webhook payload structure:
-    // { external_user_id, account_id, app, status, ... }
-    const { external_user_id, account_id, app, status } = body
-
-    if (!external_user_id || !account_id || !app) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      )
-    }
-
-    // external_user_id is the phone number (we use phone numbers directly)
-    const phoneNumber = external_user_id
 
     const prisma = getPrismaClient() as any
 
@@ -104,23 +43,22 @@ export async function PUT(request: NextRequest) {
     }
 
     if (status === 'connected') {
-      // Create or update app connection using phone number as userId
       await prisma.appConnection.upsert({
         where: {
           userId_appName: {
-            userId: user.id, // Use user.id for database, but phoneNumber for Pipedream
+            userId: user.id,
             appName: app
           }
         },
         update: {
-          pipedreamConnectionId: account_id, // This is apn_xxxxxxx
+          pipedreamConnectionId: accountId,
           active: true,
           connectedAt: new Date()
         },
         create: {
           userId: user.id,
           appName: app,
-          pipedreamConnectionId: account_id,
+          pipedreamConnectionId: accountId,
           active: true
         }
       })
@@ -144,10 +82,52 @@ export async function PUT(request: NextRequest) {
     }
 
     return NextResponse.json({ success: true })
+}
+
+/** Pipedream sends POST to webhook_uri when user completes connection. */
+export async function PUT(request: NextRequest) {
+  try {
+    const body = await request.json()
+    return await handleConnectionWebhook(body)
   } catch (error) {
     console.error('[Connect] Error handling webhook:', error)
     return NextResponse.json(
       { error: 'Failed to process webhook' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * POST /api/connect/link – two uses:
+ * 1. Our app: Body { phoneNumber, appName } → create Connect link and send to user.
+ * 2. Pipedream webhook: Body { event, account } → handle connection success/error (webhook_uri is set when creating the token).
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
+    if (body.event && body.account) {
+      return await handleConnectionWebhook(body)
+    }
+    const { phoneNumber, appName } = body
+    if (!phoneNumber || !appName) {
+      return NextResponse.json(
+        { error: 'phoneNumber and appName are required, or Pipedream webhook payload (event + account)' },
+        { status: 400 }
+      )
+    }
+    const result = await createAndSendConnectLink(phoneNumber, appName)
+    if (!result.success) {
+      return NextResponse.json(
+        { error: result.error ?? 'Failed to generate connect link' },
+        { status: 500 }
+      )
+    }
+    return NextResponse.json({ success: true, message: 'Connect link sent to user' })
+  } catch (error) {
+    console.error('[Connect] Error:', error)
+    return NextResponse.json(
+      { error: 'Failed to process request' },
       { status: 500 }
     )
   }
