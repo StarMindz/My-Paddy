@@ -270,12 +270,22 @@ async function processUserMessageAsync(
     await saveUserMessage(conversation.id, messageText)
     
     // Initialize Pipedream MCP and get tools
-    const { tools: mcpTools, cleanup: cleanupMCP } = await initializePipedreamMCP(userId, phoneNumber)
-    // Always add send_connection_link so the AI can offer a link when user asks to do something but isn't connected
+    let mcpTools: Record<string, any>
+    let cleanupMCP: () => Promise<void>
+    try {
+      const mcp = await initializePipedreamMCP(userId, phoneNumber)
+      mcpTools = mcp.tools
+      cleanupMCP = mcp.cleanup
+      console.log('[AI] MCP initialized, tools count:', Object.keys(mcpTools).length)
+    } catch (mcpError) {
+      const err = mcpError instanceof Error ? mcpError : new Error(String(mcpError))
+      console.error('[AI] initializePipedreamMCP failed:', err.message)
+      if (err.stack) console.error('[AI] MCP init stack:', err.stack)
+      throw mcpError
+    }
     const toolsForAi = { ...mcpTools, send_connection_link: SEND_CONNECTION_LINK_TOOL }
 
     try {
-      // Process with AI (includes conversation history and tools)
       let aiResult = await processUserMessage(
         messageText,
         userId,
@@ -328,7 +338,9 @@ async function processUserMessageAsync(
               result: toolResultText
             })
           } catch (error) {
-            console.error(`[AI] Error executing tool ${toolCall.toolName}:`, error)
+            const err = error instanceof Error ? error : new Error(String(error))
+            console.error(`[AI] Error executing tool ${toolCall.toolName}:`, err.message)
+            if (err.stack) console.error('[AI] Tool error stack:', err.stack)
             await saveToolMessage(
               conversation.id,
               toolCall.toolCallId,
@@ -357,22 +369,27 @@ async function processUserMessageAsync(
           aiResult.response,
           aiResult.toolCalls
         )
-        
-        // Send response to WhatsApp
         await sendWhatsAppMessage(phoneNumber, aiResult.response)
       } else {
-        // Fallback if AI fails
+        // Fallback if AI fails – log so you can see it in Vercel logs
+        console.error('[AI] No response from processUserMessage:', {
+          hasResult: !!aiResult,
+          hasResponse: aiResult ? !!aiResult.response : false,
+          toolCallsCount: aiResult?.toolCalls?.length ?? 0,
+        })
         await sendWhatsAppMessage(
           phoneNumber,
           'Sorry, I encountered an error processing your message. Please try again.'
         )
       }
     } finally {
-      // Cleanup MCP connections
       await cleanupMCP()
     }
   } catch (error) {
-    console.error('[AI] Error processing message:', error)
+    // Log full error so it appears in Vercel server logs (message + stack)
+    const err = error instanceof Error ? error : new Error(String(error))
+    console.error('[AI] Error processing message:', err.message)
+    if (err.stack) console.error('[AI] Stack:', err.stack)
     await sendWhatsAppMessage(
       phoneNumber,
       'Sorry, I encountered an error processing your message. Please try again.'

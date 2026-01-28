@@ -37,11 +37,12 @@ export async function processUserMessage(
 
     // Basic input validation
     if (!userMessage || typeof userMessage !== 'string' || userMessage.length > 1000) {
+      console.error('[AI] processUserMessage: validation failed (missing, not string, or >1000 chars)')
       return null
     }
-
     const trimmedMessage = userMessage.trim()
     if (!trimmedMessage) {
+      console.error('[AI] processUserMessage: validation failed (empty after trim)')
       return null
     }
 
@@ -195,8 +196,8 @@ Keep responses short and friendly.`
     })
 
     const response = result.text.trim()
-    
     if (!response) {
+      console.error('[AI] processUserMessage: generateText returned empty response')
       return null
     }
 
@@ -215,7 +216,9 @@ Keep responses short and friendly.`
       toolCalls
     }
   } catch (error) {
-    console.error('[AI] Error processing user message:', error)
+    const err = error instanceof Error ? error : new Error(String(error))
+    console.error('[AI] processUserMessage exception:', err.message)
+    if (err.stack) console.error('[AI] processUserMessage stack:', err.stack)
     return null
   }
 }
