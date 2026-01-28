@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "prisma generate && npm install @modelcontextprotocol/sdk@^1.25.3",
+    "postinstall": "prisma generate",
     "vercel-build": "prisma migrate deploy && next build",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
