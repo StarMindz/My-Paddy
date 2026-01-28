@@ -4,7 +4,7 @@ import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
 import { createAndSendConnectLink } from '@/lib/connect/send-connect-link'
 
 /**
- * Handle webhook from Pipedream when user connects an account.
+ * Handle webhook from Pipedream when user connects an account
  * Pipedream sends POST to the webhook_uri you pass when creating the Connect token (no UI setting).
  * Payload: { event: "CONNECTION_SUCCESS"|"CONNECTION_ERROR", account: { id, external_id, app: { name_slug } } }
  */
