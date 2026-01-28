@@ -38,7 +38,7 @@ export async function initializePipedreamMCP(
   try {
     // Get user's active app connections from database (using userId)
     const appConnections = await getActiveAppConnections(userId)
-    
+    console.log('[MCP] getActiveAppConnections for userId:', userId, 'count:', appConnections.length, 'apps:', appConnections.map((c) => c.appName))
     if (appConnections.length === 0) {
       // No connected apps, return empty tools
       return {
@@ -108,7 +108,9 @@ export async function initializePipedreamMCP(
 
         clients.push(client)
       } catch (error) {
-        console.error(`[MCP] Error connecting to app ${connection.appName}:`, error)
+        const err = error instanceof Error ? error : new Error(String(error))
+        console.error(`[MCP] Error connecting to app ${connection.appName}:`, err.message)
+        if (err.stack) console.error('[MCP] stack:', err.stack)
         // Continue with other apps even if one fails
       }
     }

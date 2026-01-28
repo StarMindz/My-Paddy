@@ -87,35 +87,39 @@ Use WhatsApp formatting:
 
 Keep responses short and friendly.`
 
+    // Set of tool names we're passing this request (SDK errors if history has tool results for tools not in this set)
+    const currentToolNames = new Set(Object.keys(tools || {}))
+
     // Convert database messages to Vercel AI SDK format (ModelMessage)
-    const messages: ModelMessage[] = messageHistory.map((msg) => {
+    // Only include tool calls and tool results for tools in currentToolNames to avoid "No tool call found for function call output"
+    const messages: ModelMessage[] = []
+    for (const msg of messageHistory) {
       if (msg.role === 'assistant' && msg.toolCalls) {
-        // Assistant message with tool calls
-        // AssistantContent can be string or array with ToolCallPart
         const toolCallsArray = Array.isArray(msg.toolCalls) ? msg.toolCalls : []
-        const toolCallParts = toolCallsArray.map((tc: any) => ({
-          type: 'tool-call' as const,
-          toolCallId: tc.toolCallId || '',
-          toolName: tc.toolName || '',
-          input: tc.input || tc.args || {}
-        }))
-        
-        // If there's text content, combine with tool calls as array
-        // TextPart format: { type: 'text', text: string }
-        const content: string | Array<any> = msg.content
-          ? [{ type: 'text' as const, text: msg.content }, ...toolCallParts]
-          : toolCallParts.length > 0
-          ? toolCallParts
-          : ''
-        
-        return {
+        const toolCallParts = toolCallsArray
+          .filter((tc: any) => currentToolNames.has(tc.toolName || ''))
+          .map((tc: any) => ({
+            type: 'tool-call' as const,
+            toolCallId: tc.toolCallId || '',
+            toolName: tc.toolName || '',
+            input: tc.input || tc.args || {}
+          }))
+        if (toolCallParts.length === 0 && !msg.content) continue
+        const content: string | Array<any> =
+          msg.content && toolCallParts.length > 0
+            ? [{ type: 'text' as const, text: msg.content }, ...toolCallParts]
+            : msg.content
+            ? msg.content
+            : toolCallParts.length > 0
+            ? toolCallParts
+            : ''
+        messages.push({
           role: 'assistant' as const,
           content: content
-        }
+        })
       } else if (msg.role === 'tool') {
-        // Tool result message
-        // ToolContent is array of ToolResultPart
-        return {
+        if (!currentToolNames.has(msg.toolName || '')) continue
+        messages.push({
           role: 'tool' as const,
           content: [{
             type: 'tool-result' as const,
@@ -126,21 +130,19 @@ Keep responses short and friendly.`
               value: msg.content || ''
             }
           }]
-        }
+        })
       } else if (msg.role === 'user') {
-        // User message
-        return {
+        messages.push({
           role: 'user' as const,
           content: msg.content || ''
-        }
+        })
       } else {
-        // System message (shouldn't be in history, but handle it)
-        return {
+        messages.push({
           role: 'system' as const,
           content: msg.content || ''
-        }
+        })
       }
-    })
+    }
 
     // Add current user message
     messages.push({
