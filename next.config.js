@@ -1,10 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  output: 'standalone',
-  experimental: {
-    serverComponentsExternalPackages: ['@modelcontextprotocol/sdk'],
-  },
+  transpilePackages: ['@modelcontextprotocol/sdk', '@ai-sdk/mcp'],
 }
 
 module.exports = nextConfig

@@ -1,16 +1,9 @@
 import { getActiveAppConnections } from '@/lib/db/app-connections'
 import { getPipedreamAccessToken } from './pipedream-auth'
+import { Client } from '@modelcontextprotocol/sdk'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const PIPEDREAM_MCP_SERVER_URL = 'https://remote.mcp.pipedream.net'
-
-// Load at runtime so webpack does not resolve at build time (fixes Vercel "Module not found").
-async function loadMcpSdk() {
-  const [sdk, transportModule] = await Promise.all([
-    import(/* webpackIgnore: true */ '@modelcontextprotocol/sdk'),
-    import(/* webpackIgnore: true */ '@modelcontextprotocol/sdk/client/streamableHttp.js'),
-  ])
-  return { Client: sdk.Client, StreamableHTTPClientTransport: transportModule.StreamableHTTPClientTransport }
-}
 
 /**
  * Initialize Pipedream MCP client and get tools for a user
@@ -59,7 +52,6 @@ export async function initializePipedreamMCP(
     // Collect all tools from all connected apps
     const allTools: Record<string, any> = {}
     const clients: any[] = []
-    const { Client, StreamableHTTPClientTransport } = await loadMcpSdk()
 
     // Create MCP client for each connected app
     for (const connection of appConnections) {
