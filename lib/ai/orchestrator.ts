@@ -106,20 +106,35 @@ Keep responses short and friendly.`
     // must have a matching tool call, and only include tool calls/results for tools in the current request.
     const currentToolNames = new Set(Object.keys(tools || {}))
 
-    // Convert database messages to ModelMessage (see sdk.vercel.ai/docs/reference/ai-sdk-core/model-message)
-    // ToolCallPart uses args; ToolResultPart uses toolCallId, toolName, output.
+    // Convert database messages to ModelMessage (@ai-sdk/provider-utils ToolCallPart uses 'input', not 'args')
+    // OpenAI provider does arguments: JSON.stringify(part.input) — part.input must be a plain object
     const messages: ModelMessage[] = []
     for (const msg of messageHistory) {
       if (msg.role === 'assistant' && msg.toolCalls) {
         const toolCallsArray = Array.isArray(msg.toolCalls) ? msg.toolCalls : []
         const toolCallParts = toolCallsArray
           .filter((tc: any) => currentToolNames.has(tc.toolName || ''))
-          .map((tc: any) => ({
-            type: 'tool-call' as const,
-            toolCallId: tc.toolCallId || '',
-            toolName: tc.toolName || '',
-            args: tc.args ?? tc.input ?? {}
-          }))
+          .map((tc: any) => {
+            const raw = tc.args ?? tc.input
+            const input =
+              raw != null && typeof raw === 'object' && !Array.isArray(raw)
+                ? raw
+                : typeof raw === 'string'
+                  ? (() => {
+                      try {
+                        return JSON.parse(raw) as Record<string, unknown>
+                      } catch {
+                        return {}
+                      }
+                    })()
+                  : {}
+            return {
+              type: 'tool-call' as const,
+              toolCallId: tc.toolCallId || '',
+              toolName: tc.toolName || '',
+              input
+            }
+          })
         if (toolCallParts.length === 0 && !msg.content) continue
         const content: string | Array<any> =
           msg.content && toolCallParts.length > 0
