@@ -297,12 +297,15 @@ async function processUserMessageAsync(
       
       // Handle tool calls if any
       if (aiResult && aiResult.toolCalls && aiResult.toolCalls.length > 0) {
-        // Send status update for tool execution
+        // Save the intermediate assistant message (the one that contains the tool calls) so history is complete
+        await saveAssistantMessage(
+          conversation.id,
+          aiResult.response || null,
+          aiResult.toolCalls
+        )
         await sendWhatsAppMessage(phoneNumber, '🔄 Working on it...')
         
-        // Execute each tool call
         const toolResults: Array<{ toolCallId: string; toolName: string; result: string }> = []
-        
         for (const toolCall of aiResult.toolCalls) {
           try {
             let toolResultText: string

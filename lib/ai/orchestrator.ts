@@ -195,14 +195,7 @@ Keep responses short and friendly.`
       tools: Object.keys(aiTools).length > 0 ? aiTools : undefined,
     })
 
-    const response = result.text.trim()
-    if (!response) {
-      console.error('[AI] processUserMessage: generateText returned empty response')
-      return null
-    }
-
-    // Extract tool calls if any (for future tool calling support)
-    // TypedToolCall has toolCallId, toolName, and args (for static) or input (for dynamic)
+    const response = (result.text ?? '').trim()
     const toolCalls = result.toolCalls && result.toolCalls.length > 0
       ? result.toolCalls.map(tc => ({
           toolCallId: tc.toolCallId,
@@ -211,8 +204,14 @@ Keep responses short and friendly.`
         }))
       : undefined
 
+    // When model returns only tool calls (no text), we must still return toolCalls so the webhook can run them
+    if (!response && (!toolCalls || toolCalls.length === 0)) {
+      console.error('[AI] processUserMessage: generateText returned no text and no tool calls')
+      return null
+    }
+
     return {
-      response,
+      response: response || '',
       toolCalls
     }
   } catch (error) {
