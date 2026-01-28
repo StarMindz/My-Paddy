@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { waitUntil } from '@vercel/functions'
 import { getUserByPhone } from '@/lib/db/users'
 import { getSignupState, setSignupState, clearSignupState } from '@/lib/db/signup-states'
 import { createUser } from '@/lib/db/users'
 import { getOrCreateConversation, getConversationWithMessages } from '@/lib/db/conversations'
-import { saveUserMessage, saveAssistantMessage } from '@/lib/db/messages'
+import { saveUserMessage, saveAssistantMessage, saveToolMessage } from '@/lib/db/messages'
 import { sendWhatsAppMessage, sendTypingIndicator } from '@/lib/channels/whatsapp/client'
 import { extractSignupData } from '@/lib/ai/extract-signup-data'
 import { processUserMessage } from '@/lib/ai/orchestrator'
+import { initializePipedreamMCP } from '@/lib/mcp/pipedream-client'
+import { executePipedreamTool } from '@/lib/mcp/tool-executor'
 import { z } from 'zod'
 
 // GET - Webhook verification
@@ -174,35 +177,168 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Existing user - process message with AI (with conversation memory)
+    // Existing user - check for app connection requests first
     if (user) {
-      console.log('[AI] Processing message for user:', user.id)
-      
-      // Show typing indicator while we process the message.
-      // This uses the official WhatsApp Cloud API typing indicator
-      // and will be dismissed automatically when we send a reply
-      // or after ~25 seconds.
-      if (incomingMessageId) {
-        await sendTypingIndicator(incomingMessageId)
+      // Check if user wants to connect an app (simple pattern matching)
+      const connectMatch = messageText.match(/connect\s+(.+?)(?:\s|$|\.|!|\?)/i)
+      if (connectMatch) {
+        const appName = connectMatch[1].trim().toLowerCase()
+        
+        // Generate Connect Link
+        try {
+          const linkRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || 'http://localhost:3000'}/api/connect/link`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phoneNumber, appName })
+          })
+          
+          const linkData = await linkRes.json()
+          // API already sends the link via WhatsApp; only send a message on failure
+          if (!linkData.success) {
+            await sendWhatsAppMessage(
+              phoneNumber,
+              `❌ Failed to generate connection link. Please try again.`
+            )
+          }
+        } catch (error) {
+          console.error('[Connect] Error:', error)
+          await sendWhatsAppMessage(
+            phoneNumber,
+            `❌ An error occurred. Please try again.`
+          )
+        }
+        
+        return NextResponse.json({ status: 'ok' })
       }
       
-      // Get or create conversation
-      const conversation = await getOrCreateConversation(user.id)
-      
-      // Get conversation history (last 20 messages)
-      const conversationWithHistory = await getConversationWithMessages(user.id, 20)
-      const messageHistory = conversationWithHistory?.messages || []
-      
-      // Save user message to database
-      await saveUserMessage(conversation.id, messageText)
-      
-      // Process with AI (includes conversation history)
-      const aiResult = await processUserMessage(
-        messageText,
+      // Not a connection request - process with AI
+      // Return immediately, process in background
+      waitUntil(processUserMessageAsync(
         user.id,
-        messageHistory,
+        phoneNumber,
+        messageText,
+        incomingMessageId,
         user.name || undefined
+      ))
+    }
+
+    return NextResponse.json({ status: 'ok' })
+  } catch (error) {
+    console.error('Webhook error:', error)
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+  }
+}
+
+function isValidEmail(email: string): boolean {
+  return z.string().email().safeParse(email).success
+}
+
+/**
+ * Process user message asynchronously in background
+ * Handles AI processing, tool execution, and WhatsApp messaging
+ */
+async function processUserMessageAsync(
+  userId: string,
+  phoneNumber: string,
+  messageText: string,
+  incomingMessageId: string | undefined,
+  userName?: string
+): Promise<void> {
+  try {
+    console.log('[AI] Processing message for user:', userId)
+    
+    // Show typing indicator while we process the message
+    if (incomingMessageId) {
+      await sendTypingIndicator(incomingMessageId)
+    }
+    
+    // Get or create conversation
+    const conversation = await getOrCreateConversation(userId)
+    
+    // Get conversation history (last 20 messages)
+    const conversationWithHistory = await getConversationWithMessages(userId, 20)
+    const messageHistory = conversationWithHistory?.messages || []
+    
+    // Save user message to database
+    await saveUserMessage(conversation.id, messageText)
+    
+    // Initialize Pipedream MCP and get tools
+    // Use phone number as externalUserId (Pipedream accepts any string!)
+    const { tools: mcpTools, cleanup: cleanupMCP } = await initializePipedreamMCP(userId, phoneNumber)
+    
+    try {
+      // Process with AI (includes conversation history and tools)
+      let aiResult = await processUserMessage(
+        messageText,
+        userId,
+        messageHistory,
+        userName,
+        mcpTools,
+        phoneNumber // Pass phone number for Pipedream externalUserId
       )
+      
+      // Handle tool calls if any
+      if (aiResult && aiResult.toolCalls && aiResult.toolCalls.length > 0) {
+        // Send status update for tool execution
+        await sendWhatsAppMessage(phoneNumber, '🔄 Working on it...')
+        
+        // Execute each tool call
+        const toolResults: Array<{ toolCallId: string; toolName: string; result: string }> = []
+        
+        for (const toolCall of aiResult.toolCalls) {
+          try {
+            // Get appName from tool definition (stored when tools were retrieved)
+            const toolDef = mcpTools[toolCall.toolName]
+            const appName = toolDef?.appName
+            
+            // Execute tool via MCP
+            // Use phone number as externalUserId for Pipedream
+            const toolResult = await executePipedreamTool(
+              userId,
+              phoneNumber,
+              toolCall.toolName,
+              toolCall.args,
+              appName
+            )
+            
+            // Save tool result to database
+            await saveToolMessage(
+              conversation.id,
+              toolCall.toolCallId,
+              toolCall.toolName,
+              toolResult.error || toolResult.result || 'Tool executed'
+            )
+            
+            toolResults.push({
+              toolCallId: toolCall.toolCallId,
+              toolName: toolCall.toolName,
+              result: toolResult.error || toolResult.result || 'Tool executed'
+            })
+          } catch (error) {
+            console.error(`[AI] Error executing tool ${toolCall.toolName}:`, error)
+            await saveToolMessage(
+              conversation.id,
+              toolCall.toolCallId,
+              toolCall.toolName,
+              `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+            )
+          }
+        }
+        
+        // Get updated conversation history with tool results
+        const updatedHistory = await getConversationWithMessages(userId, 20)
+        const updatedMessageHistory = updatedHistory?.messages || []
+        
+        // Process again with tool results to get final response
+        aiResult = await processUserMessage(
+          messageText,
+          userId,
+          updatedMessageHistory,
+          userName,
+          mcpTools,
+          phoneNumber // Pass phone number for Pipedream externalUserId
+        )
+      }
       
       if (aiResult && aiResult.response) {
         // Save assistant response to database
@@ -221,15 +357,15 @@ export async function POST(request: NextRequest) {
           'Sorry, I encountered an error processing your message. Please try again.'
         )
       }
+    } finally {
+      // Cleanup MCP connections
+      await cleanupMCP()
     }
-
-    return NextResponse.json({ status: 'ok' })
   } catch (error) {
-    console.error('Webhook error:', error)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    console.error('[AI] Error processing message:', error)
+    await sendWhatsAppMessage(
+      phoneNumber,
+      'Sorry, I encountered an error processing your message. Please try again.'
+    )
   }
-}
-
-function isValidEmail(email: string): boolean {
-  return z.string().email().safeParse(email).success
 }
