@@ -73,7 +73,7 @@ export async function getConversationWithMessages(
     include: {
       messages: {
         orderBy: {
-          createdAt: 'desc' // Newest first
+          createdAt: 'desc'
         },
         take: bufferSize
       }

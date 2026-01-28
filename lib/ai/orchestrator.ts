@@ -101,11 +101,13 @@ Use WhatsApp formatting:
 
 Keep responses short and friendly.`
 
-    // Set of tool names we're passing this request (SDK errors if history has tool results for tools not in this set)
+    // Per SDK: https://sdk.vercel.ai/docs/reference/ai-sdk-core/model-message and
+    // https://sdk.vercel.ai/docs/reference/ai-sdk-core/generate-text — every tool result in messages
+    // must have a matching tool call, and only include tool calls/results for tools in the current request.
     const currentToolNames = new Set(Object.keys(tools || {}))
 
-    // Convert database messages to Vercel AI SDK format (ModelMessage)
-    // Only include tool calls and tool results for tools in currentToolNames to avoid "No tool call found for function call output"
+    // Convert database messages to ModelMessage (see sdk.vercel.ai/docs/reference/ai-sdk-core/model-message)
+    // ToolCallPart uses args; ToolResultPart uses toolCallId, toolName, output.
     const messages: ModelMessage[] = []
     for (const msg of messageHistory) {
       if (msg.role === 'assistant' && msg.toolCalls) {
@@ -116,7 +118,7 @@ Keep responses short and friendly.`
             type: 'tool-call' as const,
             toolCallId: tc.toolCallId || '',
             toolName: tc.toolName || '',
-            input: tc.input || tc.args || {}
+            args: tc.args ?? tc.input ?? {}
           }))
         if (toolCallParts.length === 0 && !msg.content) continue
         const content: string | Array<any> =
@@ -139,10 +141,7 @@ Keep responses short and friendly.`
             type: 'tool-result' as const,
             toolCallId: msg.toolCallId || '',
             toolName: msg.toolName || '',
-            output: {
-              type: 'text' as const,
-              value: msg.content || ''
-            }
+            output: { type: 'text' as const, value: msg.content || '' }
           }]
         })
       } else if (msg.role === 'user') {
@@ -179,9 +178,18 @@ Keep responses short and friendly.`
           })
           continue
         }
+        // Safe schema: Pipedream MCP may omit or send invalid inputSchema; jsonSchema() requires valid JSON Schema (see sdk.vercel.ai/docs/reference/ai-sdk-core/json-schema)
+        const rawSchema = toolDef.inputSchema
+        const schema =
+          rawSchema &&
+          typeof rawSchema === 'object' &&
+          !Array.isArray(rawSchema) &&
+          'type' in rawSchema
+            ? rawSchema
+            : { type: 'object' as const, additionalProperties: true }
         const toolDefinition = {
           description: toolDef.description || `Execute ${toolName}`,
-          inputSchema: jsonSchema(toolDef.inputSchema),
+          inputSchema: jsonSchema(schema),
           execute: async (params: any) => {
             if (!phoneNumber) {
               return 'Error: Phone number required for tool execution'

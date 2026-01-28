@@ -29,7 +29,7 @@ export async function saveUserMessage(
 }
 
 // Save an assistant message (with optional tool calls)
-// Tool calls format matches ToolCallPart: { type: 'tool-call', toolCallId, toolName, input }
+// Stored format: { type: 'tool-call', toolCallId, toolName, input } (input = args per ModelMessage; orchestrator reads args ?? input)
 export async function saveAssistantMessage(
   conversationId: string,
   content: string | null,
