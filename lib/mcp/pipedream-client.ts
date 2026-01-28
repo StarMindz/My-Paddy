@@ -1,6 +1,6 @@
 import { getActiveAppConnections } from '@/lib/db/app-connections'
 import { getPipedreamAccessToken } from './pipedream-auth'
-import { Client } from '@modelcontextprotocol/sdk'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const PIPEDREAM_MCP_SERVER_URL = 'https://remote.mcp.pipedream.net'
