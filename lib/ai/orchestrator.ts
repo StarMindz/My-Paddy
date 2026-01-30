@@ -68,7 +68,12 @@ export async function processUserMessage(
       ? `\n\n## When the user is NOT connected\nYou have a tool \`send_connection_link\` with parameter \`appName\` (app slug). Use it when the user asks to do something that requires an app they have not connected yet (e.g. "send an email" → use appName \`gmail\`; "create a calendar event" or "add a meeting" → use \`google_calendar\`; Slack → \`slack\`). After calling it, tell them you sent a link to connect and they can try their request again after connecting. Do not ask them to "say connect gmail"—just call the tool and send the link.`
       : ''
 
+    const today = new Date()
+    const dateStr = today.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
     const systemPrompt = `You are My Padi, a friendly WhatsApp assistant. You help people send emails, create calendar events, save notes, and stay on top of tasks using their connected apps. You speak in plain language. The user is a normal person—not a developer or admin.
+
+Today's date is ${dateStr}. Use it when the user says "today", "tomorrow", "next Monday", or gives a date so you schedule or act on the correct day.
+- Put the user's full intent in the tool \`instruction\`: e.g. for events, state clearly if it's a one-off (single date) or recurring (e.g. "every day") so the downstream executor can act correctly. Do not assume options the user did not ask for.
 
 ${userName ? `The user's name is ${userName}.` : ''}
 
@@ -110,13 +115,14 @@ ${toolDescriptions
 - For sensitive actions (e.g. sending an email, deleting something), briefly state the plan and ask for "Go ahead" before calling the tool.
 - If the user's request is ambiguous, ask one short clarifying question instead of guessing.`
 
-    // Per SDK: https://sdk.vercel.ai/docs/reference/ai-sdk-core/model-message and
-    // https://sdk.vercel.ai/docs/reference/ai-sdk-core/generate-text — every tool result in messages
-    // must have a matching tool call, and only include tool calls/results for tools in the current request.
+    // Message shape per Vercel AI SDK: ToolCallPart uses toolCallId, toolName, input; ToolResultPart uses toolCallId, toolName, output.
+    // See @ai-sdk/provider-utils types/content-part.ts and lib/ai/VERCEL_AI_SDK_MESSAGES_AND_SAVING.md (sourced from sdk.vercel.ai docs).
+    // Every tool result must have a matching tool call (same toolCallId). OpenAI Responses API errors otherwise.
     const currentToolNames = new Set(Object.keys(tools || {}))
+    let lastAssistantToolCallIds = new Set<string>()
 
     // Convert database messages to ModelMessage (@ai-sdk/provider-utils ToolCallPart uses 'input', not 'args')
-    // OpenAI provider does arguments: JSON.stringify(part.input) — part.input must be a plain object
+    // Use tc.toolCallId ?? tc.id so we support both SDK and API key names when reading from DB
     const messages: ModelMessage[] = []
     for (const msg of messageHistory) {
       if (msg.role === 'assistant' && msg.toolCalls) {
@@ -137,14 +143,16 @@ ${toolDescriptions
                       }
                     })()
                   : {}
+            const id = (tc.toolCallId ?? tc.id ?? '') as string
             return {
               type: 'tool-call' as const,
-              toolCallId: tc.toolCallId || '',
+              toolCallId: id,
               toolName: tc.toolName || '',
               input
             }
           })
         if (toolCallParts.length === 0 && !msg.content) continue
+        lastAssistantToolCallIds = new Set(toolCallParts.map((p: { toolCallId: string }) => p.toolCallId))
         const content: string | Array<any> =
           msg.content && toolCallParts.length > 0
             ? [{ type: 'text' as const, text: msg.content }, ...toolCallParts]
@@ -157,13 +165,23 @@ ${toolDescriptions
           role: 'assistant' as const,
           content: content
         })
+      } else if (msg.role === 'assistant') {
+        lastAssistantToolCallIds = new Set()
+        if (msg.content) {
+          messages.push({
+            role: 'assistant' as const,
+            content: msg.content
+          })
+        }
       } else if (msg.role === 'tool') {
         if (!currentToolNames.has(msg.toolName || '')) continue
+        const toolResultId = (msg.toolCallId ?? (msg as any).id ?? '') as string
+        if (!lastAssistantToolCallIds.has(toolResultId)) continue
         messages.push({
           role: 'tool' as const,
           content: [{
             type: 'tool-result' as const,
-            toolCallId: msg.toolCallId || '',
+            toolCallId: toolResultId,
             toolName: msg.toolName || '',
             output: { type: 'text' as const, value: msg.content || '' }
           }]
@@ -281,7 +299,8 @@ ${toolDescriptions
               args = { instruction: parts.length > 0 ? `Do the following: ${parts.join('. ')}.` : JSON.stringify(args) }
             }
           }
-          return { toolCallId: tc.toolCallId, toolName: tc.toolName, args }
+          const id = (tc as { toolCallId?: string; id?: string }).toolCallId ?? (tc as { id?: string }).id ?? ''
+          return { toolCallId: id, toolName: tc.toolName, args }
         })
       : undefined
 
