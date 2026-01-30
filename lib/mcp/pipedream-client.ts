@@ -6,17 +6,17 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const PIPEDREAM_MCP_SERVER_URL = 'https://remote.mcp.pipedream.net'
 
 /**
- * Initialize Pipedream MCP client and get tools for a user
- * 
- * Pipedream MCP uses a SINGLE server (https://remote.mcp.pipedream.net)
- * You specify which app's tools you want via the 'app' header/param
- * 
- * Architecture:
- * - Single MCP server for all 3,000+ apps
- * - Authentication via Bearer token (from Pipedream SDK)
- * - Tools are scoped per app (e.g., 'gmail', 'google_calendar', 'slack')
- * - external_user_id is phone number (Pipedream accepts any string!)
- * 
+ * Initialize Pipedream MCP client and get tools for a user.
+ *
+ * Pipedream MCP: https://remote.mcp.pipedream.net
+ * Docs: https://pipedream.com/docs/connect/mcp/developers
+ * Tool modes: https://pipedream.com/docs/connect/mcp/tool-modes (we use default sub-agent)
+ *
+ * - Single server; app specified via x-pd-app-slug. We do not pass x-pd-tool-mode,
+ *   so Pipedream uses sub-agent mode: every tool from every app takes a single
+ *   "instruction" (natural-language) parameter. Orchestrator enforces this and
+ *   normalizes wrong model payloads so tool calls work for 1000+ apps.
+ *
  * @param userId - Database user ID (for looking up connections)
  * @param phoneNumber - Phone number to use as externalUserId for Pipedream
  * @returns Object with tools (prefixed with pd_) and cleanup function

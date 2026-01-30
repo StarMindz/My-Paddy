@@ -6,19 +6,21 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const PIPEDREAM_MCP_SERVER_URL = 'https://remote.mcp.pipedream.net'
 
 /**
- * Execute a Pipedream MCP tool
- * 
- * Architecture:
- * - Tools are stored with their app name when retrieved
- * - We use the app name to create the correct MCP connection
- * - Single server URL, app specified via header
- * - external_user_id is phone number (Pipedream accepts any string!)
- * 
+ * Execute a Pipedream MCP tool.
+ *
+ * Pipedream docs: https://pipedream.com/docs/connect/mcp/developers
+ * Tool modes: https://pipedream.com/docs/connect/mcp/tool-modes
+ *
+ * We use sub-agent mode (default): MCP tools/call expects params.arguments to be
+ * an object. For sub-agent, Pipedream expects { instruction: "..." }. The
+ * orchestrator normalizes model output to that shape before calling this.
+ * Tool name passed to callTool must match exactly what listTools returned (we strip pd_ prefix).
+ *
  * @param userId - Database user ID (for looking up connections)
  * @param phoneNumber - Phone number to use as externalUserId for Pipedream
- * @param toolName - Tool name (with pd_ prefix, e.g., "pd_create_calendar_event")
- * @param args - Tool arguments
- * @param appName - App name (e.g., "google_calendar") - should be stored with tool definition
+ * @param toolName - Tool name (with pd_ prefix, e.g. pd_create_calendar_event)
+ * @param args - Tool arguments (for sub-agent: { instruction: "..." })
+ * @param appName - App slug (e.g. google_calendar), stored with tool definition
  * @returns Tool execution result
  */
 export async function executePipedreamTool(
