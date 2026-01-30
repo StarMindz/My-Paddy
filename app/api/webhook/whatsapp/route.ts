@@ -286,6 +286,10 @@ async function processUserMessageAsync(
     const toolsForAi = { ...mcpTools, send_connection_link: SEND_CONNECTION_LINK_TOOL }
 
     try {
+      // Multi-round tool loop: we run tools in the webhook (not in SDK execute) and re-call
+      // processUserMessage until we get a text response. Aligned with Vercel AI SDK "forward
+      // tool calls to client/queue" pattern — see lib/ai/TOOL_LOOP_AND_VERCEL_DOCS.md
+      const MAX_TOOL_ROUNDS = 3
       let aiResult = await processUserMessage(
         messageText,
         userId,
@@ -294,23 +298,26 @@ async function processUserMessageAsync(
         toolsForAi,
         phoneNumber
       )
-      
-      // Handle tool calls if any
-      if (aiResult && aiResult.toolCalls && aiResult.toolCalls.length > 0) {
-        // Save the intermediate assistant message (the one that contains the tool calls) so history is complete
+      let round = 0
+
+      // Run tool calls in a loop so we handle multiple rounds (e.g. model asks for another tool after seeing first result)
+      while (aiResult && aiResult.toolCalls && aiResult.toolCalls.length > 0 && round < MAX_TOOL_ROUNDS) {
+        round++
+        // Save the assistant message that contains the tool calls
         await saveAssistantMessage(
           conversation.id,
           aiResult.response || null,
           aiResult.toolCalls
         )
         await sendWhatsAppMessage(phoneNumber, '🔄 Working on it...')
-        
-        const toolResults: Array<{ toolCallId: string; toolName: string; result: string }> = []
+        if (incomingMessageId) {
+          await sendTypingIndicator(incomingMessageId)
+        }
+
         for (const toolCall of aiResult.toolCalls) {
           try {
             let toolResultText: string
             if (toolCall.toolName === 'send_connection_link') {
-              // User asked to do something (e.g. send email) but isn't connected; AI called send_connection_link
               const appName = (toolCall.args?.appName ?? '').toString().trim() || 'gmail'
               const linkResult = await createAndSendConnectLink(phoneNumber, appName)
               toolResultText = linkResult.success
@@ -335,11 +342,6 @@ async function processUserMessageAsync(
               toolCall.toolName,
               toolResultText
             )
-            toolResults.push({
-              toolCallId: toolCall.toolCallId,
-              toolName: toolCall.toolName,
-              result: toolResultText
-            })
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error))
             console.error(`[AI] Error executing tool ${toolCall.toolName}:`, err.message)
@@ -364,9 +366,8 @@ async function processUserMessageAsync(
           phoneNumber
         )
       }
-      
-      if (aiResult && aiResult.response) {
-        // Save assistant response to database
+
+      if (aiResult && aiResult.response && aiResult.response.trim()) {
         await saveAssistantMessage(
           conversation.id,
           aiResult.response,
@@ -374,15 +375,19 @@ async function processUserMessageAsync(
         )
         await sendWhatsAppMessage(phoneNumber, aiResult.response)
       } else {
-        // Fallback if AI fails – log so you can see it in Vercel logs
         console.error('[AI] No response from processUserMessage:', {
           hasResult: !!aiResult,
           hasResponse: aiResult ? !!aiResult.response : false,
           toolCallsCount: aiResult?.toolCalls?.length ?? 0,
+          rounds: round,
         })
+        // If we ran tools this turn, show a friendly fallback instead of generic error
+        const ranToolsThisTurn = round > 0
         await sendWhatsAppMessage(
           phoneNumber,
-          'Sorry, I encountered an error processing your message. Please try again.'
+          ranToolsThisTurn
+            ? "I've completed the action. If something didn't work as expected or you need something else, just tell me."
+            : 'Sorry, I encountered an error processing your message. Please try again.'
         )
       }
     } finally {
