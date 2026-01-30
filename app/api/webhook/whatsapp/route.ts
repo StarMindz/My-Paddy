@@ -13,10 +13,27 @@ import { executePipedreamTool } from '@/lib/mcp/tool-executor'
 import { createAndSendConnectLink } from '@/lib/connect/send-connect-link'
 import { z } from 'zod'
 
+// Allow up to 5 min with Fluid Compute enabled (Hobby max 300s). Vercel docs: fluid compute default/max 300s.
+export const maxDuration = 300
+
 /** Tools the AI can use: MCP tools from connected apps + send_connection_link when user asks to do something but isn't connected */
 const SEND_CONNECTION_LINK_TOOL = {
   description: 'Send the user a link to connect an app (e.g. Gmail, Google Calendar). Use when they ask to do something (send email, create event) but have not connected that app yet. appName: gmail (email), google_calendar (calendar), slack (Slack).',
   isConnectionTool: true as const,
+}
+
+/** Derive a short status from the first tool's description (no hardcoded app/tool names). */
+function getStatusForToolCalls(
+  toolCalls: Array<{ toolName: string }>,
+  tools: Record<string, { description?: string }>
+): string {
+  if (!toolCalls?.length) return 'Working on it...'
+  const first = toolCalls[0]
+  const def = first?.toolName ? tools[first.toolName] : undefined
+  const desc = (def?.description || '').trim()
+  if (!desc) return 'Working on it...'
+  const max = 42
+  return desc.length <= max ? desc : desc.slice(0, max).trim() + '...'
 }
 
 // GET - Webhook verification
@@ -309,10 +326,11 @@ async function processUserMessageAsync(
           aiResult.response || null,
           aiResult.toolCalls
         )
-        await sendWhatsAppMessage(phoneNumber, '🔄 Working on it...')
-        if (incomingMessageId) {
-          await sendTypingIndicator(incomingMessageId)
-        }
+        // Typing once before status (docs: typing dismissed when we send a reply). See lib/channels/whatsapp/TYING_AND_STATUS.md
+        if (incomingMessageId) await sendTypingIndicator(incomingMessageId)
+        const statusMessage = getStatusForToolCalls(aiResult.toolCalls, toolsForAi)
+        await sendWhatsAppMessage(phoneNumber, `🔄 ${statusMessage}`)
+        if (incomingMessageId) await sendTypingIndicator(incomingMessageId) // best-effort; may not show after our reply
 
         for (const toolCall of aiResult.toolCalls) {
           try {
