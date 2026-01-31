@@ -10,6 +10,10 @@ import { extractSignupData } from '@/lib/ai/extract-signup-data'
 import { processUserMessage } from '@/lib/ai/orchestrator'
 import { initializePipedreamMCP } from '@/lib/mcp/pipedream-client'
 import { executePipedreamTool } from '@/lib/mcp/tool-executor'
+import {
+  fetchCalendarListViaProxy,
+  isCalendarListEventsTool,
+} from '@/lib/mcp/calendar-list-via-proxy'
 import { createAndSendConnectLink } from '@/lib/connect/send-connect-link'
 import { z } from 'zod'
 
@@ -34,6 +38,33 @@ function getStatusForToolCalls(
   if (!desc) return 'Working on it...'
   const max = 42
   return desc.length <= max ? desc : desc.slice(0, max).trim() + '...'
+}
+
+/**
+ * Normalize args for calendar create-event tools so the event is created as single/one-time
+ * unless the user explicitly asked for recurring.
+ * Proof: Google Calendar API events.insert - "recurrence[] ... This field is omitted for
+ * single events." https://developers.google.com/workspace/calendar/api/v3/reference/events/insert
+ * Pipedream sub-agent can default to daily; we force no recurrence via explicit instruction.
+ */
+function normalizeCalendarCreateEventInstruction(
+  toolName: string,
+  args: Record<string, any>,
+  appName?: string
+): Record<string, any> {
+  const isCalendarCreate =
+    (appName === 'google_calendar' || /google_calendar|calendar/.test(toolName)) &&
+    /create.*event|create.*calendar|add.*event/i.test(toolName)
+  if (!isCalendarCreate || !args || typeof args !== 'object') return args
+  const instruction = args.instruction
+  if (typeof instruction !== 'string' || !instruction.trim()) return args
+  const alreadyRecurring = /\b(recurring|every day|daily|weekly|monthly|repeat|RRULE|FREQ=)\b/i.test(instruction)
+  if (alreadyRecurring) return args
+  const noRecurrenceSuffix = ' Single one-time event only. Do not set recurrence or RRULE.'
+  if (/one-off|single event|no recurrence|do not (set |add )?recurrence|omit recurrence/i.test(instruction)) {
+    return args
+  }
+  return { ...args, instruction: instruction.trim() + noRecurrenceSuffix }
 }
 
 // GET - Webhook verification
@@ -344,14 +375,39 @@ async function processUserMessageAsync(
             } else {
               const toolDef = mcpTools[toolCall.toolName]
               const appName = toolDef?.appName
-              const toolResult = await executePipedreamTool(
-                userId,
-                phoneNumber,
-                toolCall.toolName,
-                toolCall.args,
-                appName
-              )
-              toolResultText = toolResult.error || toolResult.result || 'Tool executed'
+              // Calendar list events: use Connect API Proxy (bounded timeMin/timeMax) to avoid 30s timeout
+              if (isCalendarListEventsTool(toolCall.toolName, appName)) {
+                const proxyResult = await fetchCalendarListViaProxy(
+                  userId,
+                  phoneNumber
+                )
+                if (proxyResult.error) {
+                  toolResultText = proxyResult.error
+                } else {
+                  const r = proxyResult.result
+                  toolResultText =
+                    r == null
+                      ? 'No calendar data returned.'
+                      : typeof r === 'string'
+                        ? r
+                        : JSON.stringify(r)
+                }
+              } else {
+                const normalizedArgs = normalizeCalendarCreateEventInstruction(
+                  toolCall.toolName,
+                  toolCall.args ?? {},
+                  appName
+                )
+                const toolResult = await executePipedreamTool(
+                  userId,
+                  phoneNumber,
+                  toolCall.toolName,
+                  normalizedArgs,
+                  appName
+                )
+                toolResultText =
+                  toolResult.error || toolResult.result || 'Tool executed'
+              }
             }
 
             await saveToolMessage(

@@ -65,7 +65,7 @@ export async function processUserMessage(
         : null
 
     const connectionInstruction = hasConnectionTool
-      ? `\n\n## When the user is NOT connected\nYou have a tool \`send_connection_link\` with parameter \`appName\` (app slug). Use it when the user asks to do something that requires an app they have not connected yet (e.g. "send an email" → use appName \`gmail\`; "create a calendar event" or "add a meeting" → use \`google_calendar\`; Slack → \`slack\`). After calling it, tell them you sent a link to connect and they can try their request again after connecting. Do not ask them to "say connect gmail"—just call the tool and send the link.`
+      ? `\n\n## Connection links: \nWhen the user is NOT connected\nYou have a tool \`send_connection_link\` (parameter \`appName\`: gmail, google_calendar, slack). Use it when the user asks to connect an app, needs a link, or wants to do something that requires an app they have not connected yet. **Always call the tool to generate a new link**—never paste or repeat a link from earlier in the conversation (links expire). Only skip calling if the user explicitly asks for "the old link" or "the same link I had before". After calling it, say you sent a fresh link and they can connect then try again.`
       : ''
 
     const today = new Date()
@@ -106,7 +106,7 @@ ${toolDescriptions
 ## How to call tools (Pipedream Connect)
 
 - In sub-agent mode (default), every tool takes a single parameter: **instruction** (a natural-language sentence). Use only the parameters the tool's schema shows; if it shows only \`instruction\`, pass \`{ "instruction": "..." }\` and do not invent other param names.
-- Put all intent **in the instruction string** — the executor only sees that text. For events: always say in the instruction whether it's one-off or recurring (e.g. "Create a **one-off, non-recurring** event on [date]..." unless the user asked for "every day" or similar).
+- Put all intent **in the instruction string** — the executor only sees that text. For **create-event** (calendar) tools: the instruction MUST state it is a **single one-time event with no recurrence** unless the user explicitly asked for repeating (e.g. "every day", "weekly"). Default is one-time; only add recurrence if the user said so.
 - Examples: \`{ "instruction": "Send an email to john@example.com with subject Meeting tomorrow and body Hi." }\` or \`{ "instruction": "Create a one-off (non-recurring) calendar event tomorrow at 2pm titled Team standup. Do not set recurrence." }\`
 
 ## Tool parameters
