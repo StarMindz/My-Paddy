@@ -13,7 +13,10 @@ import { executePipedreamTool } from '@/lib/mcp/tool-executor'
 import {
   fetchCalendarListViaProxy,
   isCalendarListEventsTool,
+  isCalendarCreateEventTool,
+  createCalendarEventViaProxy,
 } from '@/lib/mcp/calendar-list-via-proxy'
+import { extractCalendarEventFromInstruction } from '@/lib/ai/extract-calendar-event'
 import { createAndSendConnectLink } from '@/lib/connect/send-connect-link'
 import { z } from 'zod'
 
@@ -26,7 +29,7 @@ const SEND_CONNECTION_LINK_TOOL = {
   isConnectionTool: true as const,
 }
 
-/** Derive a short status from the first tool's description (no hardcoded app/tool names). */
+/** Derive a short status from the first tool's description. Truncate at a full sentence or word boundary, not mid-word. */
 function getStatusForToolCalls(
   toolCalls: Array<{ toolName: string }>,
   tools: Record<string, { description?: string }>
@@ -37,7 +40,18 @@ function getStatusForToolCalls(
   const desc = (def?.description || '').trim()
   if (!desc) return 'Working on it...'
   const max = 42
-  return desc.length <= max ? desc : desc.slice(0, max).trim() + '...'
+  if (desc.length <= max) return desc
+  const atMax = desc.slice(0, max + 1)
+  const lastSentenceEnd = atMax.lastIndexOf('. ')
+  const lastSpace = atMax.lastIndexOf(' ')
+  const cut =
+    lastSentenceEnd > 0
+      ? lastSentenceEnd + 1
+      : lastSpace > 0
+        ? lastSpace
+        : max
+  const trimmed = desc.slice(0, cut).trim()
+  return trimmed.length > 0 ? trimmed + (trimmed.endsWith('.') ? '' : '...') : desc.slice(0, max).trim() + '...'
 }
 
 /**
@@ -391,6 +405,70 @@ async function processUserMessageAsync(
                       : typeof r === 'string'
                         ? r
                         : JSON.stringify(r)
+                }
+              } else if (
+                isCalendarCreateEventTool(toolCall.toolName, appName)
+              ) {
+                const args = toolCall.args ?? {}
+                const instruction =
+                  typeof args.instruction === 'string' ? args.instruction.trim() : ''
+                const wantsRecurring = /\b(recurring|every day|daily|weekly|monthly|repeat|RRULE|FREQ=)\b/i.test(instruction)
+                if (!wantsRecurring && instruction) {
+                  const extracted = await extractCalendarEventFromInstruction(instruction)
+                  if (extracted) {
+                    const createResult = await createCalendarEventViaProxy(
+                      userId,
+                      phoneNumber,
+                      {
+                        summary: extracted.summary,
+                        startDateTime: extracted.startDateTime,
+                        endDateTime: extracted.endDateTime,
+                      }
+                    )
+                    if (createResult.error) {
+                      toolResultText = createResult.error
+                    } else {
+                      const r = createResult.result
+                      toolResultText =
+                        r == null
+                          ? 'Event created.'
+                          : typeof r === 'string'
+                            ? r
+                            : (r as { htmlLink?: string })?.htmlLink
+                              ? `Event created: ${(r as { htmlLink: string }).htmlLink}`
+                              : JSON.stringify(r)
+                    }
+                  } else {
+                    const normalizedArgs = normalizeCalendarCreateEventInstruction(
+                      toolCall.toolName,
+                      args,
+                      appName
+                    )
+                    const toolResult = await executePipedreamTool(
+                      userId,
+                      phoneNumber,
+                      toolCall.toolName,
+                      normalizedArgs,
+                      appName
+                    )
+                    toolResultText =
+                      toolResult.error || toolResult.result || 'Tool executed'
+                  }
+                } else {
+                  const normalizedArgs = normalizeCalendarCreateEventInstruction(
+                    toolCall.toolName,
+                    args,
+                    appName
+                  )
+                  const toolResult = await executePipedreamTool(
+                    userId,
+                    phoneNumber,
+                    toolCall.toolName,
+                    normalizedArgs,
+                    appName
+                  )
+                  toolResultText =
+                    toolResult.error || toolResult.result || 'Tool executed'
                 }
               } else {
                 const normalizedArgs = normalizeCalendarCreateEventInstruction(

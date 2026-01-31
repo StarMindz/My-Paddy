@@ -107,3 +107,102 @@ export function isCalendarListEventsTool(
     ) && !/create|add|insert|delete|update/.test(actualName)
   return !!isGoogleCalendar && !!looksLikeList
 }
+
+/**
+ * Whether this tool call is a "create calendar event" style call for google_calendar.
+ * Used to route to Connect API Proxy so we control the request body and omit
+ * recurrence (single event). Pipedream sub-agent can add default recurrence.
+ *
+ * Pipedream docs: https://pipedream.com/docs/connect/mcp/tool-modes (sub-agent: "you lose some of the control")
+ * Google Calendar API: recurrence omitted for single events.
+ */
+export function isCalendarCreateEventTool(
+  toolName: string,
+  appName?: string
+): boolean {
+  const isGoogleCalendar =
+    appName === 'google_calendar' || /google_calendar|calendar/.test(toolName)
+  const actualName = toolName.startsWith('pd_') ? toolName.slice(3) : toolName
+  const looksLikeCreate =
+    /create.*event|create.*calendar|add.*event/i.test(actualName)
+  return !!isGoogleCalendar && !!looksLikeCreate
+}
+
+/**
+ * Create a single Google Calendar event via Pipedream Connect API Proxy.
+ * We build the POST body ourselves and omit recurrence so the event is one-time.
+ *
+ * Pipedream docs: https://pipedream.com/docs/connect/api-proxy
+ * Google Calendar API: https://developers.google.com/workspace/calendar/api/v3/reference/events/insert
+ */
+export async function createCalendarEventViaProxy(
+  userId: string,
+  phoneNumber: string,
+  event: {
+    summary: string
+    startDateTime: string
+    endDateTime: string
+    description?: string
+    location?: string
+  }
+): Promise<{ result: any; error?: string }> {
+  const connection = await getAppConnection(userId, 'google_calendar')
+  if (!connection || !connection.active) {
+    return {
+      result: null,
+      error: 'No active Google Calendar connection. Please connect the app first.',
+    }
+  }
+  const accountId = connection.pipedreamConnectionId
+  if (!accountId) {
+    return {
+      result: null,
+      error: 'Google Calendar account not linked. Please reconnect the app.',
+    }
+  }
+
+  if (!event.summary?.trim()) {
+    return {
+      result: null,
+      error: 'Event summary is required.',
+    }
+  }
+
+  const body = {
+    summary: event.summary.slice(0, 1024),
+    start: { dateTime: event.startDateTime },
+    end: { dateTime: event.endDateTime },
+    ...(event.description && { description: event.description.slice(0, 8192) }),
+    ...(event.location && { location: event.location.slice(0, 1024) }),
+  }
+  const url = `${GOOGLE_CALENDAR_EVENTS_BASE}/primary/events`
+
+  try {
+    const client = getPipedreamClient()
+    const response = await client.makeProxyRequest(
+      {
+        searchParams: {
+          external_user_id: phoneNumber,
+          account_id: accountId,
+        },
+      },
+      {
+        url,
+        options: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      }
+    )
+
+    return { result: response }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[Calendar Proxy] Create event error:', message)
+    return {
+      result: null,
+      error: `Failed to create event: ${message}`,
+    }
+  }
+}
