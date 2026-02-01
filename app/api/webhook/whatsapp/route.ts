@@ -413,7 +413,25 @@ async function processUserMessageAsync(
                 const args = toolCall.args ?? {}
                 const instruction =
                   (typeof args.instruction === 'string' ? args.instruction : typeof (args as { input?: string }).input === 'string' ? (args as { input: string }).input : '').trim()
-                const wantsRecurring = /\b(recurring|every day|daily|weekly|monthly|repeat|RRULE|FREQ=)\b/i.test(instruction)
+                const normalized = instruction.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g, '-')
+                const hasOneOff =
+                  /\bnon[- ]?recurring\b/i.test(normalized) ||
+                  /\bno recurrence\b/i.test(normalized) ||
+                  /\bone[- ]?off\b/i.test(normalized) ||
+                  /\bsingle\b/i.test(normalized) && /\bevent\b/i.test(normalized) ||
+                  /\bdo not repeat\b/i.test(normalized) ||
+                  /\bdon't repeat\b/i.test(normalized) ||
+                  /\bwithout repeat\b/i.test(normalized) ||
+                  /\bno repeat\b/i.test(normalized)
+                const hasRecurring =
+                  /\bevery day\b/i.test(normalized) ||
+                  /\bdaily\b/i.test(normalized) ||
+                  /\bweekly\b/i.test(normalized) ||
+                  /\bmonthly\b/i.test(normalized) ||
+                  (/\brepeat\b/i.test(normalized) && !/\b(do not|don't|no|without)\s+repeat\b/i.test(normalized)) ||
+                  /\bRRULE\b/i.test(normalized) ||
+                  /\bFREQ=\b/i.test(normalized)
+                const wantsRecurring = !hasOneOff && hasRecurring
                 console.log('[Calendar create]', {
                   toolName: toolCall.toolName,
                   appName,
