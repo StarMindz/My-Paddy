@@ -194,7 +194,6 @@ export async function createCalendarEventViaProxy(
 
   try {
     const client = getPipedreamClient()
-    console.log('[Calendar Proxy] createCalendarEventViaProxy: POST (body has no recurrence)')
     const response = await client.makeProxyRequest(
       {
         searchParams: {

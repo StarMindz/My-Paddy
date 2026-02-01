@@ -31,7 +31,6 @@ export async function initializePipedreamMCP(
   try {
     // Get user's active app connections from database (using userId)
     const appConnections = await getActiveAppConnections(userId)
-    console.log('[MCP] getActiveAppConnections for userId:', userId, 'count:', appConnections.length, 'apps:', appConnections.map((c) => c.appName))
     if (appConnections.length === 0) {
       // No connected apps, return empty tools
       return {

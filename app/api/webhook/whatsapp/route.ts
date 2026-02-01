@@ -89,24 +89,12 @@ export async function GET(request: NextRequest) {
   const token = searchParams.get('hub.verify_token')
   const challenge = searchParams.get('hub.challenge')
 
-  console.log('[Webhook] GET verification attempt:', {
-    mode,
-    hasToken: !!token,
-    hasChallenge: !!challenge,
-    verifyTokenSet: !!process.env.WHATSAPP_VERIFY_TOKEN
-  })
-
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN
 
   if (mode === 'subscribe' && token === verifyToken) {
-    console.log('[Webhook] Verification successful')
     return new Response(challenge, { status: 200 })
   }
 
-  console.log('[Webhook] Verification failed:', {
-    modeMatch: mode === 'subscribe',
-    tokenMatch: token === verifyToken
-  })
   return new Response('Forbidden', { status: 403 })
 }
 
@@ -114,26 +102,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    
-    // Log webhook received
-    console.log('[Webhook] POST received')
-    console.log('[Webhook] Body structure:', {
-      hasEntry: !!body.entry,
-      entryLength: body.entry?.length,
-      hasChanges: !!body.entry?.[0]?.changes,
-      changesLength: body.entry?.[0]?.changes?.length,
-      field: body.entry?.[0]?.changes?.[0]?.field
-    })
-    
+
     // Parse WhatsApp message
     const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]
     if (!message) {
-      console.log('[Webhook] No message in payload - might be status update or other event')
-      // Still return 200 to acknowledge receipt
       return NextResponse.json({ status: 'ok' })
     }
-    
-    console.log('[Webhook] Message from:', message.from, 'Type:', message.type)
 
     // Use phone number directly from WhatsApp (they send valid numbers)
     const phoneNumber = message.from.trim()
@@ -315,8 +289,6 @@ async function processUserMessageAsync(
   userName?: string
 ): Promise<void> {
   try {
-    console.log('[AI] Processing message for user:', userId)
-    
     // Show typing indicator while we process the message
     if (incomingMessageId) {
       await sendTypingIndicator(incomingMessageId)
@@ -339,7 +311,6 @@ async function processUserMessageAsync(
       const mcp = await initializePipedreamMCP(userId, phoneNumber)
       mcpTools = mcp.tools
       cleanupMCP = mcp.cleanup
-      console.log('[AI] MCP initialized, tools count:', Object.keys(mcpTools).length)
     } catch (mcpError) {
       const err = mcpError instanceof Error ? mcpError : new Error(String(mcpError))
       console.error('[AI] initializePipedreamMCP failed:', err.message)
@@ -432,18 +403,9 @@ async function processUserMessageAsync(
                   /\bRRULE\b/i.test(normalized) ||
                   /\bFREQ=\b/i.test(normalized)
                 const wantsRecurring = !hasOneOff && hasRecurring
-                console.log('[Calendar create]', {
-                  toolName: toolCall.toolName,
-                  appName,
-                  instructionLen: instruction.length,
-                  instructionPreview: instruction.slice(0, 80),
-                  wantsRecurring,
-                })
                 if (!wantsRecurring && instruction) {
                   const extracted = await extractCalendarEventFromInstruction(instruction)
-                  console.log('[Calendar create] extraction', { extracted: !!extracted, path: extracted ? 'proxy' : 'MCP (extraction failed)' })
                   if (extracted) {
-                    console.log('[Calendar create] calling createCalendarEventViaProxy (single event, no recurrence)')
                     const createResult = await createCalendarEventViaProxy(
                       userId,
                       phoneNumber,
@@ -484,7 +446,6 @@ async function processUserMessageAsync(
                       toolResult.error || toolResult.result || 'Tool executed'
                   }
                 } else {
-                  console.log('[Calendar create] path', { reason: !instruction ? 'empty instruction' : 'wantsRecurring', path: 'MCP' })
                   const normalizedArgs = normalizeCalendarCreateEventInstruction(
                     toolCall.toolName,
                     args,

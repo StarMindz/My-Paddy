@@ -9,7 +9,6 @@ import { createAndSendConnectLink } from '@/lib/connect/send-connect-link'
  * Payload: { event: "CONNECTION_SUCCESS"|"CONNECTION_ERROR", account: { id, external_id, app: { name_slug } } }
  */
 async function handleConnectionWebhook(body: any): Promise<NextResponse> {
-  console.log('[Connect Webhook] Received body:', JSON.stringify(body, null, 2))
   // Pipedream format: event + account.id, account.external_id, account.app.name_slug
   const event = body.event
   const account = body.account
@@ -17,8 +16,6 @@ async function handleConnectionWebhook(body: any): Promise<NextResponse> {
   const accountId = account?.id ?? body.account_id
   const app = account?.app?.name_slug ?? body.app
   const status = event === 'CONNECTION_SUCCESS' ? 'connected' : event === 'CONNECTION_ERROR' ? 'error' : body.status
-
-  console.log('[Connect Webhook] Parsed:', { event, phoneNumber, accountId, app, status })
 
   if (!phoneNumber || !accountId || !app) {
     console.error('[Connect Webhook] Missing required fields')
@@ -34,8 +31,6 @@ async function handleConnectionWebhook(body: any): Promise<NextResponse> {
     let user = await prisma.user.findUnique({
       where: { phoneNumber: phoneNumber }
     })
-    
-    console.log('[Connect Webhook] Found user:', user?.id || 'not found')
 
     if (!user) {
       // Create user if doesn't exist (shouldn't happen, but handle it)
