@@ -55,11 +55,12 @@ function getStatusForToolCalls(
 }
 
 /**
- * Normalize args for calendar create-event tools so the event is created as single/one-time
+ * Normalize args for calendar create tools (event or reminder) so the entry is single/one-time
  * unless the user explicitly asked for recurring.
  * Proof: Google Calendar API events.insert - "recurrence[] ... This field is omitted for
  * single events." https://developers.google.com/workspace/calendar/api/v3/reference/events/insert
- * Pipedream sub-agent can default to daily; we force no recurrence via explicit instruction.
+ * Pipedream sub-agent can default to daily for both event and reminder tools.
+ * Must match same tool names as isCalendarCreateEventTool (event + reminder).
  */
 function normalizeCalendarCreateEventInstruction(
   toolName: string,
@@ -68,7 +69,7 @@ function normalizeCalendarCreateEventInstruction(
 ): Record<string, any> {
   const isCalendarCreate =
     (appName === 'google_calendar' || /google_calendar|calendar/.test(toolName)) &&
-    /create.*event|create.*calendar|add.*event/i.test(toolName)
+    /create.*(event|calendar|reminder)|add.*(event|calendar|reminder)|set.*(event|reminder)/i.test(toolName)
   if (!isCalendarCreate || !args || typeof args !== 'object') return args
   const instruction = args.instruction
   if (typeof instruction !== 'string' || !instruction.trim()) return args
@@ -423,6 +424,7 @@ async function processUserMessageAsync(
                         summary: extracted.summary,
                         startDateTime: extracted.startDateTime,
                         endDateTime: extracted.endDateTime,
+                        ...(extracted.attendees?.length && { attendees: extracted.attendees }),
                       }
                     )
                     if (createResult.error) {

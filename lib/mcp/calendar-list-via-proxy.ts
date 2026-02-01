@@ -109,9 +109,13 @@ export function isCalendarListEventsTool(
 }
 
 /**
- * Whether this tool call is a "create calendar event" style call for google_calendar.
- * Used to route to Connect API Proxy so we control the request body and omit
- * recurrence (single event). Pipedream sub-agent can add default recurrence.
+ * Whether this tool call creates a calendar entry (event or reminder) for google_calendar.
+ * We route these to Connect API Proxy so we control the request body and omit
+ * recurrence (single event). Pipedream sub-agent adds default recurrence for
+ * both "create event" and "create reminder" / "set reminder" tools.
+ *
+ * Include event AND reminder: Pipedream may expose e.g. create_reminder, set_reminder;
+ * if we only matched "event", those would go to MCP and get daily recurrence.
  *
  * Pipedream docs: https://pipedream.com/docs/connect/mcp/tool-modes (sub-agent: "you lose some of the control")
  * Google Calendar API: recurrence omitted for single events.
@@ -124,7 +128,9 @@ export function isCalendarCreateEventTool(
     appName === 'google_calendar' || /google_calendar|calendar/.test(toolName)
   const actualName = toolName.startsWith('pd_') ? toolName.slice(3) : toolName
   const looksLikeCreate =
-    /create.*event|create.*calendar|add.*event/i.test(actualName)
+    /create.*(event|calendar|reminder)|add.*(event|calendar|reminder)|set.*(event|reminder)/i.test(
+      actualName
+    )
   return !!isGoogleCalendar && !!looksLikeCreate
 }
 
@@ -144,6 +150,7 @@ export async function createCalendarEventViaProxy(
     endDateTime: string
     description?: string
     location?: string
+    attendees?: string[]
   }
 ): Promise<{ result: any; error?: string }> {
   const connection = await getAppConnection(userId, 'google_calendar')
@@ -168,14 +175,22 @@ export async function createCalendarEventViaProxy(
     }
   }
 
+  const attendeeEmails = Array.isArray(event.attendees)
+    ? event.attendees.filter((e) => typeof e === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)).slice(0, 50)
+    : []
+
   const body = {
     summary: event.summary.slice(0, 1024),
     start: { dateTime: event.startDateTime },
     end: { dateTime: event.endDateTime },
     ...(event.description && { description: event.description.slice(0, 8192) }),
     ...(event.location && { location: event.location.slice(0, 1024) }),
+    ...(attendeeEmails.length > 0 && { attendees: attendeeEmails.map((email) => ({ email })) }),
   }
-  const url = `${GOOGLE_CALENDAR_EVENTS_BASE}/primary/events`
+  const url =
+    attendeeEmails.length > 0
+      ? `${GOOGLE_CALENDAR_EVENTS_BASE}/primary/events?sendUpdates=all`
+      : `${GOOGLE_CALENDAR_EVENTS_BASE}/primary/events`
 
   try {
     const client = getPipedreamClient()
