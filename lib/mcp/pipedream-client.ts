@@ -27,15 +27,17 @@ export async function initializePipedreamMCP(
 ): Promise<{
   tools: Record<string, any>
   cleanup: () => Promise<void>
+  /** App slugs the user has connected (from same DB query as tools). Use for AI prompt so we don't query twice. */
+  connectedAppNames: string[]
 }> {
   try {
     // Get user's active app connections from database (using userId)
     const appConnections = await getActiveAppConnections(userId)
     if (appConnections.length === 0) {
-      // No connected apps, return empty tools
       return {
         tools: {},
-        cleanup: async () => {}
+        cleanup: async () => {},
+        connectedAppNames: []
       }
     }
 
@@ -106,11 +108,16 @@ export async function initializePipedreamMCP(
       }
     }
 
-    // Return tools and cleanup function
+    // Only list apps we actually loaded tools for (keeps prompt in sync with available tools)
+    const connectedAppNames = [...new Set(
+      (Object.values(allTools) as Array<{ appName?: string }>)
+        .map((t) => t.appName)
+        .filter((name): name is string => Boolean(name))
+    )]
+
     return {
       tools: allTools,
       cleanup: async () => {
-        // Close all client connections
         for (const client of clients) {
           try {
             await client.close()
@@ -118,13 +125,15 @@ export async function initializePipedreamMCP(
             console.error('[MCP] Error closing client:', error)
           }
         }
-      }
+      },
+      connectedAppNames
     }
   } catch (error) {
     console.error('[MCP] Error initializing Pipedream MCP:', error)
     return {
       tools: {},
-      cleanup: async () => {}
+      cleanup: async () => {},
+      connectedAppNames: []
     }
   }
 }

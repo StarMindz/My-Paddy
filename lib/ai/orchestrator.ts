@@ -26,7 +26,8 @@ export async function processUserMessage(
   messageHistory: Message[],
   userName?: string,
   tools?: Record<string, any>,
-  phoneNumber?: string // Phone number for Pipedream externalUserId
+  phoneNumber?: string,
+  connectedAppNames?: string[] // App slugs the user has already connected (from DB). Used so the AI knows which apps need a connect link.
 ): Promise<{ response: string; toolCalls?: Array<{ toolCallId: string; toolName: string; args: Record<string, any> }> } | null> {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -64,8 +65,12 @@ export async function processUserMessage(
             .join('\n')
         : null
 
+    const connectedList =
+      connectedAppNames && connectedAppNames.length > 0
+        ? connectedAppNames.join(', ')
+        : 'none'
     const connectionInstruction = hasConnectionTool
-      ? `\n\n## Connection links: \nWhen the user is NOT connected\nYou have a tool \`send_connection_link\` (parameter \`appName\`: gmail, google_calendar, slack). Use it when the user asks to connect an app, needs a link, or wants to do something that requires an app they have not connected yet. **Always call the tool to generate a new link**—never paste or repeat a link from earlier in the conversation (links expire). Only skip calling if the user explicitly asks for "the old link" or "the same link I had before". After calling it, say you sent a fresh link and they can connect then try again.`
+      ? `\n\n## Connected apps (source of truth)\nThe user has these apps **already connected**: ${connectedList}. Any app the user asks to use that is **not** in this list is not connected—you must call \`send_connection_link\` for that app first (one call per unconnected app).\n\n## Connection links (any Pipedream app)\nYou have a tool \`send_connection_link\` (parameter \`appName\`: app slug, e.g. gmail, google_calendar, google_docs, google_sheets, slack, notion). Use it when the user asks to connect an app, needs a connect link, or asks to do something that requires an app **not** in the connected-apps list above.\n- **Multi-app requests**: If the user asks to use several apps (e.g. "save to Google Sheets and drop me a note on Slack"), identify each app. For each app that is **not** in the connected-apps list, call \`send_connection_link\` once with that app's slug (e.g. google_sheets, slack). Then you can proceed with actions for apps that are already connected.\n- **Never reuse a link**: You must **never** output, copy, or repeat a link that appeared earlier in this conversation. Connect links expire in 4 hours. Whenever the user needs to connect an app, **call** \`send_connection_link\` to generate a **new** link; do not paste any link from your message history. After calling the tool, say you sent a fresh link and they can connect then try again.`
       : ''
 
     const today = new Date()
@@ -101,7 +106,7 @@ ${userName ? `The user's name is ${userName}.` : ''}
 
 ${toolDescriptions
   ? `## Available tools (user has these apps connected)\n\n${toolDescriptions}\n\nWhen the user requests an action (e.g. "send an email to X", "create a meeting tomorrow"), use the appropriate tool above, then confirm what you did in one short sentence.`
-  : ''}${connectionInstruction}${!toolDescriptions && !hasConnectionTool ? `\n\nTo use features like calendar or email, users need to connect their accounts first. If they ask about these features, offer to send them a connection link.` : ''}
+  : ''}${connectionInstruction}${!toolDescriptions && !hasConnectionTool ? `\n\nTo use features (calendar, email, docs, or other apps), users need to connect their accounts first. If they ask about these features, offer to send them a connection link if they are not connected yet.` : ''}
 
 ## How to call tools (Pipedream Connect)
 
@@ -224,7 +229,7 @@ ${toolDescriptions
       for (const [toolName, toolDef] of Object.entries(tools)) {
         if (toolDef.isConnectionTool) {
           // send_connection_link: AI calls it; webhook executes it (createAndSendConnectLink)
-          const connectionSchema = z.object({ appName: z.string().describe('App slug: gmail (email), google_calendar (calendar), slack (Slack), etc.') })
+          const connectionSchema = z.object({ appName: z.string().describe('App the user asked to connect: use the exact slug (e.g. google_docs, gmail, slack) or natural name (e.g. "Google Docs", "Gmail"). The system resolves it via Pipedream List Apps API.') })
           aiTools[toolName] = tool({
             description: toolDef.description || 'Send the user a link to connect an app.',
             inputSchema: connectionSchema,

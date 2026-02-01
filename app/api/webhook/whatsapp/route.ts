@@ -25,7 +25,7 @@ export const maxDuration = 300
 
 /** Tools the AI can use: MCP tools from connected apps + send_connection_link when user asks to do something but isn't connected */
 const SEND_CONNECTION_LINK_TOOL = {
-  description: 'Send the user a link to connect an app (e.g. Gmail, Google Calendar). Use when they ask to do something (send email, create event) but have not connected that app yet. appName: gmail (email), google_calendar (calendar), slack (Slack).',
+  description: 'Send the user a fresh connect link for one app. Works for any Pipedream app (1000+). Use when the user asks to connect an app or wants to use an app that is NOT in the connected-apps list. Parameter appName: app slug (e.g. gmail, google_calendar, google_docs, google_sheets, slack, notion). For multi-app requests (e.g. "save to Sheets and notify on Slack"), call this tool once per unconnected app. You must always call this tool to generate a new link—never output or repeat a link from earlier in the conversation (links expire in 4 hours).',
   isConnectionTool: true as const,
 }
 
@@ -307,10 +307,12 @@ async function processUserMessageAsync(
     // Initialize Pipedream MCP and get tools
     let mcpTools: Record<string, any>
     let cleanupMCP: () => Promise<void>
+    let connectedAppNames: string[]
     try {
       const mcp = await initializePipedreamMCP(userId, phoneNumber)
       mcpTools = mcp.tools
       cleanupMCP = mcp.cleanup
+      connectedAppNames = mcp.connectedAppNames
     } catch (mcpError) {
       const err = mcpError instanceof Error ? mcpError : new Error(String(mcpError))
       console.error('[AI] initializePipedreamMCP failed:', err.message)
@@ -330,7 +332,8 @@ async function processUserMessageAsync(
         messageHistory,
         userName,
         toolsForAi,
-        phoneNumber
+        phoneNumber,
+        connectedAppNames
       )
       let round = 0
 
@@ -500,13 +503,15 @@ async function processUserMessageAsync(
 
         const updatedHistory = await getConversationWithMessages(userId, 20)
         const updatedMessageHistory = updatedHistory?.messages || []
+        // Use same connectedAppNames from MCP so we never list an app we don't have tools for (toolsForAi is unchanged this request)
         aiResult = await processUserMessage(
           messageText,
           userId,
           updatedMessageHistory,
           userName,
           toolsForAi,
-          phoneNumber
+          phoneNumber,
+          connectedAppNames
         )
       }
 
