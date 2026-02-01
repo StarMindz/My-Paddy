@@ -412,11 +412,20 @@ async function processUserMessageAsync(
               ) {
                 const args = toolCall.args ?? {}
                 const instruction =
-                  typeof args.instruction === 'string' ? args.instruction.trim() : ''
+                  (typeof args.instruction === 'string' ? args.instruction : typeof (args as { input?: string }).input === 'string' ? (args as { input: string }).input : '').trim()
                 const wantsRecurring = /\b(recurring|every day|daily|weekly|monthly|repeat|RRULE|FREQ=)\b/i.test(instruction)
+                console.log('[Calendar create]', {
+                  toolName: toolCall.toolName,
+                  appName,
+                  instructionLen: instruction.length,
+                  instructionPreview: instruction.slice(0, 80),
+                  wantsRecurring,
+                })
                 if (!wantsRecurring && instruction) {
                   const extracted = await extractCalendarEventFromInstruction(instruction)
+                  console.log('[Calendar create] extraction', { extracted: !!extracted, path: extracted ? 'proxy' : 'MCP (extraction failed)' })
                   if (extracted) {
+                    console.log('[Calendar create] calling createCalendarEventViaProxy (single event, no recurrence)')
                     const createResult = await createCalendarEventViaProxy(
                       userId,
                       phoneNumber,
@@ -457,6 +466,7 @@ async function processUserMessageAsync(
                       toolResult.error || toolResult.result || 'Tool executed'
                   }
                 } else {
+                  console.log('[Calendar create] path', { reason: !instruction ? 'empty instruction' : 'wantsRecurring', path: 'MCP' })
                   const normalizedArgs = normalizeCalendarCreateEventInstruction(
                     toolCall.toolName,
                     args,

@@ -27,8 +27,14 @@ export async function extractCalendarEventFromInstruction(
   instruction: string
 ): Promise<ExtractedCalendarEvent | null> {
   try {
-    if (!process.env.OPENAI_API_KEY) return null
-    if (!instruction || typeof instruction !== 'string' || instruction.length > 2000) return null
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('[extract-calendar-event] No OPENAI_API_KEY')
+      return null
+    }
+    if (!instruction || typeof instruction !== 'string' || instruction.length > 2000) {
+      console.error('[extract-calendar-event] Invalid instruction', { len: instruction?.length, type: typeof instruction })
+      return null
+    }
 
     const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
@@ -50,21 +56,37 @@ Instruction: ${instruction.trim()}`,
       }),
     })
 
-    const raw = result.output as {
-      summary?: string
-      startDateTime?: string
-      endDateTime?: string
-      attendees?: string[]
-    } | undefined
-    if (!raw?.summary || !raw?.startDateTime || !raw?.endDateTime) return null
+    const raw = result.output as Record<string, unknown> | undefined
+    if (!raw || typeof raw !== 'object') {
+      console.error('[extract-calendar-event] Missing or invalid result.output', { hasOutput: !!result.output, outputType: typeof result?.output })
+      return null
+    }
+    const summary = (raw.summary ?? raw.title) as string | undefined
+    const startDateTime = (raw.startDateTime ?? raw.start_date_time ?? raw.start) as string | undefined
+    const endDateTime = (raw.endDateTime ?? raw.end_date_time ?? raw.end) as string | undefined
+    const attendees = Array.isArray(raw.attendees) ? (raw.attendees as string[]) : []
+    if (!summary?.trim() || !startDateTime?.trim() || !endDateTime?.trim()) {
+      console.error('[extract-calendar-event] Missing required fields', {
+        hasSummary: !!summary?.trim(),
+        hasStart: !!startDateTime?.trim(),
+        hasEnd: !!endDateTime?.trim(),
+        keys: Object.keys(raw),
+      })
+      return null
+    }
     const parsed = CalendarEventSchema.safeParse({
-      summary: raw.summary,
-      startDateTime: raw.startDateTime,
-      endDateTime: raw.endDateTime,
-      attendees: Array.isArray(raw.attendees) ? raw.attendees : [],
+      summary: summary.trim(),
+      startDateTime: startDateTime.trim(),
+      endDateTime: endDateTime.trim(),
+      attendees,
     })
-    return parsed.success ? parsed.data : null
-  } catch {
+    if (!parsed.success) {
+      console.error('[extract-calendar-event] Schema validation failed', parsed.error.flatten())
+      return null
+    }
+    return parsed.data
+  } catch (err) {
+    console.error('[extract-calendar-event] Exception', err instanceof Error ? err.message : err)
     return null
   }
 }
