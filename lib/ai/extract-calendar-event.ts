@@ -50,8 +50,7 @@ Instruction: ${instruction.trim()}`,
           endDateTime: z.string().describe('End in ISO 8601'),
           attendees: z
             .array(z.string().describe('Attendee email address'))
-            .optional()
-            .describe('List of invitee emails if instruction mentions inviting people'),
+            .describe('List of invitee emails if instruction mentions inviting people; use empty array [] if none'),
         }),
       }),
     })
