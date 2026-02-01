@@ -67,7 +67,7 @@ async function handleConnectionWebhook(body: any): Promise<NextResponse> {
       // Send confirmation via WhatsApp
       await sendWhatsAppMessage(
         phoneNumber,
-        `✅ Successfully connected your ${app} account! You can now use features like creating events, sending emails, and more.`
+        `✅ Successfully connected your ${app} account! You can now use access tools needed to complete your request.`
       )
     } else if (status === 'disconnected') {
       // Mark connection as inactive
