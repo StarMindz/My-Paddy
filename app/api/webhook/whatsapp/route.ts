@@ -23,9 +23,9 @@ import { z } from 'zod'
 // Allow up to 5 min with Fluid Compute enabled (Hobby max 300s). Vercel docs: fluid compute default/max 300s.
 export const maxDuration = 300
 
-/** Tools the AI can use: MCP tools from connected apps + send_connection_link when user asks to do something but isn't connected */
+/** Send connect link. AI passes app name (e.g. gmail, Google Drive); we resolve to the correct slug via Pipedream API. */
 const SEND_CONNECTION_LINK_TOOL = {
-  description: 'Send the user a fresh connect link for one app. Works for any Pipedream app (1000+). Use when the user asks to connect an app or wants to use an app that is NOT in the connected-apps list. Parameter appName: app slug (e.g. gmail, google_calendar, google_docs, google_sheets, slack, notion). For multi-app requests (e.g. "save to Sheets and notify on Slack"), call this tool once per unconnected app. You must always call this tool to generate a new link—never output or repeat a link from earlier in the conversation (links expire in 4 hours).',
+  description: 'Send the user a fresh connect link for one app. Parameter appName: the app the user asked for (e.g. gmail, Google Drive, Slack). We resolve it to the correct Pipedream slug. One call per unconnected app. Never reuse a link from the conversation (links expire in 4 hours).',
   isConnectionTool: true as const,
 }
 
