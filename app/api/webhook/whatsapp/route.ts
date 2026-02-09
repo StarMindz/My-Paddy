@@ -201,13 +201,15 @@ export async function POST(request: NextRequest) {
           
           await sendWhatsAppMessage(
             phoneNumber,
-            `🎉 Welcome ${userName}! You're all set.\n\n` +
-            `I'm your AI assistant and I can help you with:\n` +
-            `• Create calendar events\n` +
-            `• Send emails\n` +
-            `• Manage tasks\n` +
-            `• And much more!\n\n` +
-            `Try: "Create a meeting for Friday 5pm"`
+            `Welcome, ${userName}. You're in.\n\n` +
+            `I'm your assistant, here to make life easier. Ask me a question, get something explained, or tell me what you need done. When you want to use an app (email, calendar, Slack, etc.), connect your favourite ones and I'll get things done in them. Over 1,000+ are available to connect.\n\n` +
+            `*Try one of these:*\n` +
+            `• What's on my calendar today?\n` +
+            `• Schedule a meeting tomorrow at 3pm\n` +
+            `• Send an email to [someone]: meeting follow-up and action items\n` +
+            `• Explain how to [something] in simple terms\n` +
+            `• Post to Slack: standup in 5 min\n\n` +
+            `Or just ask or say anything: questions, tasks, or chat. No need to say "connect" or remember app names.`
           )
           return NextResponse.json({ status: 'ok' })
         } else {
@@ -324,7 +326,7 @@ async function processUserMessageAsync(
     try {
       // Multi-round tool loop: we run tools in the webhook (not in SDK execute) and re-call
       // processUserMessage until we get a text response. Aligned with Vercel AI SDK "forward
-      // tool calls to client/queue" pattern — see lib/ai/TOOL_LOOP_AND_VERCEL_DOCS.md
+      // tool calls to client/queue" pattern; see lib/ai/TOOL_LOOP_AND_VERCEL_DOCS.md
       const MAX_TOOL_ROUNDS = 3
       let aiResult = await processUserMessage(
         messageText,
