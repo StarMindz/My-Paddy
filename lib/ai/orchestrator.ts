@@ -70,7 +70,7 @@ export async function processUserMessage(
         ? connectedAppNames.join(', ')
         : 'none'
     const connectionInstruction = hasConnectionTool
-      ? `\n\n## Connected apps (source of truth)\nThe user has these apps **already connected**: ${connectedList}. Any app the user asks to use that is **not** in this list is not connected—you must call \`send_connection_link\` for that app first (one call per unconnected app).\n\n## Connect link\nCall \`send_connection_link\` with \`appName\` = the app the user asked for (e.g. gmail, slack, notion). We resolve it to the correct Pipedream slug(Use the correct pipedream slug for that app). Do this when when the user asks to connect an app, needs a connect link, or asks to do something that requires an app **not** in the connected-apps list. Never reuse a link from earlier in the conversation (links expire in 4 hours).`
+      ? `\n\n## Connected apps (source of truth)\nThe user has these apps **already connected**: ${connectedList}. Any app the user asks to use that is **not** in this list is not connected—call \`send_connection_link\` for that app first (one call per unconnected app).\n\n## Connect link\nCall \`send_connection_link\` with \`appName\` = the app the user asked for (e.g. gmail, Google Drive, Slack). We resolve it to the correct Pipedream slug. Never reuse a link from earlier in the conversation (links expire in 4 hours).`
       : ''
 
     const today = new Date()
