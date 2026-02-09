@@ -70,7 +70,7 @@ export async function processUserMessage(
         ? connectedAppNames.join(', ')
         : 'none'
     const connectionInstruction = hasConnectionTool
-      ? `\n\n## Connected apps (source of truth)\nThe user has these apps **already connected**: ${connectedList}. Any app the user asks to use that is **not** in this list is not connected—call \`send_connection_link\` for that app first (one call per unconnected app).\n\n## Connect link\nCall \`send_connection_link\` with \`appName\` = the app the user asked for (e.g. gmail, Google Drive, Slack). We resolve it to the correct Pipedream slug. Never reuse a link from earlier in the conversation (links expire in 4 hours).`
+      ? `\n\n## Connected apps (source of truth)\nThe user has these apps **already connected**: ${connectedList}. Any app the user asks to use that is **not** in this list is not connected; call \`send_connection_link\` for that app first (one call per unconnected app).\n\n## Connect link\nCall \`send_connection_link\` with \`appName\` = the app the user asked for (e.g. gmail, Google Drive, Slack). We resolve it to the correct Pipedream slug. Never reuse a link from earlier in the conversation (links expire in 4 hours).\n\nIn your reply: **never output or paste a connect link or any URL**. The system already sends the real link to the user. Just confirm the link was sent (e.g. "I've sent you a link above") and say what to do next (e.g. tap it to connect, then tell me when done). Do not invent or repeat any connect URL.`
       : ''
 
     const today = new Date()

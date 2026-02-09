@@ -29,13 +29,14 @@ const SEND_CONNECTION_LINK_TOOL = {
   isConnectionTool: true as const,
 }
 
-/** Derive a short status from the first tool's description. Truncate at a full sentence or word boundary, not mid-word. */
+/** Derive a short status from the first tool's description. Truncate at a full sentence or word boundary, not mid-word. Use generic text for connection link so we don't send internal tool description to the user. */
 function getStatusForToolCalls(
   toolCalls: Array<{ toolName: string }>,
   tools: Record<string, { description?: string }>
 ): string {
   if (!toolCalls?.length) return 'Working on it...'
   const first = toolCalls[0]
+  if (first?.toolName === 'send_connection_link') return 'Sending your connect link...'
   const def = first?.toolName ? tools[first.toolName] : undefined
   const desc = (def?.description || '').trim()
   if (!desc) return 'Working on it...'
