@@ -70,7 +70,7 @@ export async function processUserMessage(
         ? connectedAppNames.join(', ')
         : 'none'
     const connectionInstruction = hasConnectionTool
-      ? `\n\n## Connected apps (source of truth)\nThe user has these apps **already connected**: ${connectedList}. Any app the user asks to use that is **not** in this list is not connected; call \`send_connection_link\` for that app first (one call per unconnected app).\n\n## Connect link\nCall \`send_connection_link\` with \`appName\` = the app the user asked for (e.g. gmail, Google Drive, Slack). We resolve it to the correct Pipedream slug. Never reuse a link from earlier in the conversation (links expire in 4 hours).\n\nIn your reply: **never output or paste a connect link or any URL**. The system already sends the real link to the user. Just confirm the link was sent (e.g. "I've sent you a link above") and say what to do next (e.g. tap it to connect, then tell me when done). Do not invent or repeat any connect URL.`
+      ? `\n\n## Connected apps (source of truth)\nThe user has these apps **already connected**: ${connectedList}. Any app the user asks to use that is **not** in this list is not connected; call \`send_connection_link\` for that app first (one call per unconnected app).\n\n## Choosing the app\nWhen the user asks to connect or use an app (e.g. "connect my calendar", "use Notion"), you must first figure out which Pipedream app they mean.\n\n1. Call \`search_connectable_apps\` with a short query based on what they said (e.g. "google calendar", "gmail", "notion").\n2. Look at the returned apps (name + description) and choose the best match for what the user asked for.\n3. Then call \`send_connection_link\` with \`appSlug\` equal to the **exact** \`slug\` of the app you chose from the search results.\n\nNever invent or guess a slug. Always choose from the real apps returned by \`search_connectable_apps\`.\n\n## Connect link\nCall \`send_connection_link\` with \`appSlug\` = the slug of the app you chose from \`search_connectable_apps\` (e.g. "gmail", "google-calendar", "slack", "notion"). Never reuse a link from earlier in the conversation (links expire in 4 hours).\n\nIn your reply: **never output or paste a connect link or any URL**. The system already sends the real link to the user. Just confirm the link was sent (e.g. "I've sent you a link above") and say what to do next (e.g. tap it to connect, then tell me when done). Do not invent or repeat any connect URL.`
       : ''
 
     const today = new Date()
@@ -229,7 +229,11 @@ ${toolDescriptions
       for (const [toolName, toolDef] of Object.entries(tools)) {
         if (toolDef.isConnectionTool) {
           const connectionSchema = z.object({
-            appName: z.string().describe('App the user asked to connect (e.g. gmail, google_docs, slack). We resolve to the correct slug.'),
+            appSlug: z
+              .string()
+              .describe(
+                'Exact Pipedream app slug to connect (e.g. "gmail", "google-calendar", "slack", "notion"). Must be chosen from the slug values returned by search_connectable_apps.'
+              ),
           })
           aiTools[toolName] = tool({
             description: toolDef.description || 'Send the user a link to connect an app.',

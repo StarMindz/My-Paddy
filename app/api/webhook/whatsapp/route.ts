@@ -17,26 +17,41 @@ import {
   createCalendarEventViaProxy,
 } from '@/lib/mcp/calendar-list-via-proxy'
 import { extractCalendarEventFromInstruction } from '@/lib/ai/extract-calendar-event'
-import { createAndSendConnectLink } from '@/lib/connect/send-connect-link'
+import { createAndSendConnectLink, searchConnectableApps } from '@/lib/connect/send-connect-link'
 import { z } from 'zod'
 
 // Allow up to 5 min with Fluid Compute enabled (Hobby max 300s). Vercel docs: fluid compute default/max 300s.
 export const maxDuration = 300
 
-/** Send connect link. AI passes app name (e.g. gmail, Google Drive); we resolve to the correct slug via Pipedream API. */
+/** Tools the AI can use: MCP tools from connected apps + connect tools when user asks to do something but isn't connected */
 const SEND_CONNECTION_LINK_TOOL = {
-  description: 'Send the user a fresh connect link for one app. Parameter appName: the app the user asked for (e.g. gmail, Google Drive, Slack). We resolve it to the correct Pipedream slug. One call per unconnected app. Never reuse a link from the conversation (links expire in 4 hours).',
+  description:
+    'Send the user a fresh connect link for one app. Works for any Pipedream app (1000+). Use after you have chosen a specific app slug (e.g. "gmail", "google-calendar", "slack", "notion") from search_connectable_apps. Parameter appSlug: the exact slug of the app to connect. For multi-app requests (e.g. "save to Sheets and notify on Slack"), call this tool once per unconnected app. You must always call this tool to generate a new link; never output or repeat a link from earlier in the conversation (links expire in 4 hours).',
   isConnectionTool: true as const,
 }
 
-/** Derive a short status from the first tool's description. Truncate at a full sentence or word boundary, not mid-word. Use generic text for connection link so we don't send internal tool description to the user. */
+const SEARCH_CONNECTABLE_APPS_TOOL = {
+  description:
+    'Search for Pipedream apps the user might want to connect. Call this when the user asks to connect or use an app (e.g. "calendar", "Gmail", "Notion") and you need to see the available options. Parameter query: short phrase describing the app (e.g. "google calendar", "gmail", "notion"). Use the returned app slugs when calling send_connection_link.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'Short phrase describing the app to search for (e.g. "google calendar", "gmail", "notion").',
+      },
+    },
+    required: ['query'],
+  },
+}
+
+/** Derive a short status from the first tool's description. Truncate at a full sentence or word boundary, not mid-word. */
 function getStatusForToolCalls(
   toolCalls: Array<{ toolName: string }>,
   tools: Record<string, { description?: string }>
 ): string {
   if (!toolCalls?.length) return 'Working on it...'
   const first = toolCalls[0]
-  if (first?.toolName === 'send_connection_link') return 'Sending your connect link...'
   const def = first?.toolName ? tools[first.toolName] : undefined
   const desc = (def?.description || '').trim()
   if (!desc) return 'Working on it...'
@@ -202,15 +217,13 @@ export async function POST(request: NextRequest) {
           
           await sendWhatsAppMessage(
             phoneNumber,
-            `Welcome, ${userName}. You're in.\n\n` +
-            `I'm your assistant, here to make life easier. Ask me a question, get something explained, or tell me what you need done. When you want to use an app (email, calendar, Slack, etc.), connect your favourite ones and I'll get things done in them. Over 1,000+ are available to connect.\n\n` +
-            `*Try one of these:*\n` +
-            `• What's on my calendar today?\n` +
-            `• Schedule a meeting tomorrow at 3pm\n` +
-            `• Send an email to [someone]: meeting follow-up and action items\n` +
-            `• Explain how to [something] in simple terms\n` +
-            `• Post to Slack: standup in 5 min\n\n` +
-            `Or just ask or say anything: questions, tasks, or chat. No need to say "connect" or remember app names.`
+            `🎉 Welcome ${userName}! You're all set.\n\n` +
+            `I'm your AI assistant and I can help you with:\n` +
+            `• Create calendar events\n` +
+            `• Send emails\n` +
+            `• Manage tasks\n` +
+            `• And much more!\n\n` +
+            `Try: "Create a meeting for Friday 5pm"`
           )
           return NextResponse.json({ status: 'ok' })
         } else {
@@ -322,12 +335,16 @@ async function processUserMessageAsync(
       if (err.stack) console.error('[AI] MCP init stack:', err.stack)
       throw mcpError
     }
-    const toolsForAi = { ...mcpTools, send_connection_link: SEND_CONNECTION_LINK_TOOL }
+    const toolsForAi = {
+      ...mcpTools,
+      search_connectable_apps: SEARCH_CONNECTABLE_APPS_TOOL,
+      send_connection_link: SEND_CONNECTION_LINK_TOOL,
+    }
 
     try {
       // Multi-round tool loop: we run tools in the webhook (not in SDK execute) and re-call
       // processUserMessage until we get a text response. Aligned with Vercel AI SDK "forward
-      // tool calls to client/queue" pattern; see lib/ai/TOOL_LOOP_AND_VERCEL_DOCS.md
+      // tool calls to client/queue" pattern — see lib/ai/TOOL_LOOP_AND_VERCEL_DOCS.md
       const MAX_TOOL_ROUNDS = 3
       let aiResult = await processUserMessage(
         messageText,
@@ -358,11 +375,15 @@ async function processUserMessageAsync(
         for (const toolCall of aiResult.toolCalls) {
           try {
             let toolResultText: string
-            if (toolCall.toolName === 'send_connection_link') {
-              const appName = (toolCall.args?.appName ?? '').toString().trim() || 'gmail'
-              const linkResult = await createAndSendConnectLink(phoneNumber, appName)
+            if (toolCall.toolName === 'search_connectable_apps') {
+              const query = (toolCall.args?.query ?? '').toString().trim()
+              const result = await searchConnectableApps(query)
+              toolResultText = JSON.stringify(result)
+            } else if (toolCall.toolName === 'send_connection_link') {
+              const appSlug = (toolCall.args?.appSlug ?? '').toString().trim() || 'gmail'
+              const linkResult = await createAndSendConnectLink(phoneNumber, appSlug)
               toolResultText = linkResult.success
-                ? `Connection link for ${appName} sent to the user on WhatsApp.`
+                ? `Connection link for ${appSlug} sent to the user on WhatsApp.`
                 : `Failed to send link: ${linkResult.error ?? 'Unknown error'}`
             } else {
               const toolDef = mcpTools[toolCall.toolName]
