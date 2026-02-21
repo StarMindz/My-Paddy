@@ -2,6 +2,7 @@ import { generateText, tool, jsonSchema } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import type { ModelMessage } from '@ai-sdk/provider-utils'
 import { z } from 'zod'
+import { formatNowInTimezone } from '@/lib/context/user-context'
 
 // Message type from Prisma (will be available after db:generate)
 type Message = {
@@ -27,7 +28,9 @@ export async function processUserMessage(
   userName?: string,
   tools?: Record<string, any>,
   phoneNumber?: string,
-  connectedAppNames?: string[] // App slugs the user has already connected (from DB). Used so the AI knows which apps need a connect link.
+  connectedAppNames?: string[], // App slugs the user has already connected (from DB).
+  userTimezone?: string,
+  userCountry?: string
 ): Promise<{ response: string; toolCalls?: Array<{ toolCallId: string; toolName: string; args: Record<string, any> }> } | null> {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -75,9 +78,13 @@ export async function processUserMessage(
 
     const today = new Date()
     const dateStr = today.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    const timezoneContext =
+      userTimezone
+        ? `\nThe user's timezone is ${userTimezone}${userCountry ? ` (${userCountry})` : ''}. Current date and time there: ${formatNowInTimezone(userTimezone)}. Use this for "today", "tomorrow", and any time the user gives.\n`
+        : ''
     const systemPrompt = `You are My Padi, a friendly WhatsApp assistant. You help people send emails, create calendar events, save notes, and stay on top of tasks using their connected apps. You speak in plain language. The user is a normal person—not a developer or admin.
 
-Today's date is ${dateStr}. Use it when the user says "today", "tomorrow", "next Monday", or gives a date so you schedule or act on the correct day.
+Today's date is ${dateStr}.${timezoneContext} Use it when the user says "today", "tomorrow", "next Monday", or gives a date so you schedule or act on the correct day.
 - Put the user's full intent **inside the tool \`instruction\`** (the text you pass to the tool). What you tell the user in your reply is separate; the tool only sees the \`instruction\` string. For calendar/event tools: if the user did not ask for a repeating event, the instruction must explicitly say "one-off", "single event", "no recurrence", or "do not repeat" so the executor creates a one-time event. Example: \`{ "instruction": "Create a one-off (non-recurring) calendar event on 1 Feb 2026 from 3pm to 5pm, title Glycobuddy meeting, no attendees. Do not set any recurrence." }\`
 
 ${userName ? `The user's name is ${userName}.` : ''}

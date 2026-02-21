@@ -18,6 +18,7 @@ import {
 } from '@/lib/mcp/calendar-list-via-proxy'
 import { extractCalendarEventFromInstruction } from '@/lib/ai/extract-calendar-event'
 import { createAndSendConnectLink, searchConnectableApps } from '@/lib/connect/send-connect-link'
+import { getTimezoneFromPhone } from '@/lib/context/user-context'
 import { z } from 'zod'
 
 // Allow up to 5 min with Fluid Compute enabled (Hobby max 300s). Vercel docs: fluid compute default/max 300s.
@@ -45,13 +46,15 @@ const SEARCH_CONNECTABLE_APPS_TOOL = {
   },
 }
 
-/** Derive a short status from the first tool's description. Truncate at a full sentence or word boundary, not mid-word. */
+/** Derive a short status from the first tool's description. Truncate at a full sentence or word boundary, not mid-word. Use generic text for connection tools so we don't send internal tool descriptions to the user. */
 function getStatusForToolCalls(
   toolCalls: Array<{ toolName: string }>,
   tools: Record<string, { description?: string }>
 ): string {
   if (!toolCalls?.length) return 'Working on it...'
   const first = toolCalls[0]
+  if (first?.toolName === 'search_connectable_apps') return 'Looking up your apps...'
+  if (first?.toolName === 'send_connection_link') return 'Sending your connect link...'
   const def = first?.toolName ? tools[first.toolName] : undefined
   const desc = (def?.description || '').trim()
   if (!desc) return 'Working on it...'
@@ -239,39 +242,6 @@ export async function POST(request: NextRequest) {
 
     // Existing user - check for app connection requests first
     if (user) {
-      // Check if user wants to connect an app (simple pattern matching)
-      const connectMatch = messageText.match(/connect\s+(.+?)(?:\s|$|\.|!|\?)/i)
-      if (connectMatch) {
-        const appName = connectMatch[1].trim().toLowerCase()
-        
-        // Generate Connect Link
-        try {
-          const linkRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || 'http://localhost:3000'}/api/connect/link`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phoneNumber, appName })
-          })
-          
-          const linkData = await linkRes.json()
-          // API already sends the link via WhatsApp; only send a message on failure
-          if (!linkData.success) {
-            await sendWhatsAppMessage(
-              phoneNumber,
-              `❌ Failed to generate connection link. Please try again.`
-            )
-          }
-        } catch (error) {
-          console.error('[Connect] Error:', error)
-          await sendWhatsAppMessage(
-            phoneNumber,
-            `❌ An error occurred. Please try again.`
-          )
-        }
-        
-        return NextResponse.json({ status: 'ok' })
-      }
-      
-      // Not a connection request - process with AI
       // Return immediately, process in background
       waitUntil(processUserMessageAsync(
         user.id,
@@ -341,10 +311,12 @@ async function processUserMessageAsync(
       send_connection_link: SEND_CONNECTION_LINK_TOOL,
     }
 
+    const userTimeContext = getTimezoneFromPhone(phoneNumber)
+
     try {
       // Multi-round tool loop: we run tools in the webhook (not in SDK execute) and re-call
       // processUserMessage until we get a text response. Aligned with Vercel AI SDK "forward
-      // tool calls to client/queue" pattern — see lib/ai/TOOL_LOOP_AND_VERCEL_DOCS.md
+      // tool calls to client/queue" pattern; see lib/ai/TOOL_LOOP_AND_VERCEL_DOCS.md
       const MAX_TOOL_ROUNDS = 3
       let aiResult = await processUserMessage(
         messageText,
@@ -353,7 +325,9 @@ async function processUserMessageAsync(
         userName,
         toolsForAi,
         phoneNumber,
-        connectedAppNames
+        connectedAppNames,
+        userTimeContext.timezone,
+        userTimeContext.country
       )
       let round = 0
 
@@ -366,12 +340,14 @@ async function processUserMessageAsync(
           aiResult.response || null,
           aiResult.toolCalls
         )
-        // Typing once before status (docs: typing dismissed when we send a reply). See lib/channels/whatsapp/TYING_AND_STATUS.md
-        if (incomingMessageId) await sendTypingIndicator(incomingMessageId)
-        const statusMessage = getStatusForToolCalls(aiResult.toolCalls, toolsForAi)
-        await sendWhatsAppMessage(phoneNumber, `🔄 ${statusMessage}`)
-        if (incomingMessageId) await sendTypingIndicator(incomingMessageId) // best-effort; may not show after our reply
 
+        // const statusMessage = getStatusForToolCalls(aiResult.toolCalls, toolsForAi)
+        await sendWhatsAppMessage(phoneNumber, `🔄 Working on it...`)
+
+
+        const hasSearchInRound = aiResult.toolCalls.some(
+          (t: { toolName: string }) => t.toolName === 'search_connectable_apps'
+        )
         for (const toolCall of aiResult.toolCalls) {
           try {
             let toolResultText: string
@@ -380,15 +356,20 @@ async function processUserMessageAsync(
               const result = await searchConnectableApps(query)
               toolResultText = JSON.stringify(result)
             } else if (toolCall.toolName === 'send_connection_link') {
-              const appSlug = (toolCall.args?.appSlug ?? '').toString().trim() || 'gmail'
-              const linkResult = await createAndSendConnectLink(phoneNumber, appSlug)
-              toolResultText = linkResult.success
-                ? `Connection link for ${appSlug} sent to the user on WhatsApp.`
-                : `Failed to send link: ${linkResult.error ?? 'Unknown error'}`
+              if (hasSearchInRound) {
+                toolResultText =
+                  'You called send_connection_link in the same round as search_connectable_apps. Use the search result above: pick one app from the "apps" list that matches what the user asked for, then in your next message call send_connection_link with that app\'s exact "slug" value. Do not guess a slug.'
+              } else {
+                const appSlug = (toolCall.args?.appSlug ?? '').toString().trim()
+                const linkResult = await createAndSendConnectLink(phoneNumber, appSlug)
+                toolResultText = linkResult.success
+                  ? `Connection link sent to the user on WhatsApp.`
+                  : `Failed: ${linkResult.error ?? 'Unknown error'}`
+              }
             } else {
               const toolDef = mcpTools[toolCall.toolName]
               const appName = toolDef?.appName
-              // Calendar list events: use Connect API Proxy (bounded timeMin/timeMax) to avoid 30s timeout
+              const args = toolCall.args ?? {}
               if (isCalendarListEventsTool(toolCall.toolName, appName)) {
                 const proxyResult = await fetchCalendarListViaProxy(
                   userId,
@@ -405,72 +386,37 @@ async function processUserMessageAsync(
                         ? r
                         : JSON.stringify(r)
                 }
-              } else if (
-                isCalendarCreateEventTool(toolCall.toolName, appName)
-              ) {
-                const args = toolCall.args ?? {}
-                const instruction =
-                  (typeof args.instruction === 'string' ? args.instruction : typeof (args as { input?: string }).input === 'string' ? (args as { input: string }).input : '').trim()
-                const normalized = instruction.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g, '-')
-                const hasOneOff =
-                  /\bnon[- ]?recurring\b/i.test(normalized) ||
-                  /\bno recurrence\b/i.test(normalized) ||
-                  /\bone[- ]?off\b/i.test(normalized) ||
-                  /\bsingle\b/i.test(normalized) && /\bevent\b/i.test(normalized) ||
-                  /\bdo not repeat\b/i.test(normalized) ||
-                  /\bdon't repeat\b/i.test(normalized) ||
-                  /\bwithout repeat\b/i.test(normalized) ||
-                  /\bno repeat\b/i.test(normalized)
-                const hasRecurring =
-                  /\bevery day\b/i.test(normalized) ||
-                  /\bdaily\b/i.test(normalized) ||
-                  /\bweekly\b/i.test(normalized) ||
-                  /\bmonthly\b/i.test(normalized) ||
-                  (/\brepeat\b/i.test(normalized) && !/\b(do not|don't|no|without)\s+repeat\b/i.test(normalized)) ||
-                  /\bRRULE\b/i.test(normalized) ||
-                  /\bFREQ=\b/i.test(normalized)
-                const wantsRecurring = !hasOneOff && hasRecurring
-                if (!wantsRecurring && instruction) {
-                  const extracted = await extractCalendarEventFromInstruction(instruction)
-                  if (extracted) {
-                    const createResult = await createCalendarEventViaProxy(
-                      userId,
-                      phoneNumber,
-                      {
-                        summary: extracted.summary,
-                        startDateTime: extracted.startDateTime,
-                        endDateTime: extracted.endDateTime,
-                        ...(extracted.attendees?.length && { attendees: extracted.attendees }),
-                      }
-                    )
-                    if (createResult.error) {
-                      toolResultText = createResult.error
-                    } else {
-                      const r = createResult.result
-                      toolResultText =
-                        r == null
-                          ? 'Event created.'
-                          : typeof r === 'string'
-                            ? r
-                            : (r as { htmlLink?: string })?.htmlLink
-                              ? `Event created: ${(r as { htmlLink: string }).htmlLink}`
-                              : JSON.stringify(r)
+              } else if (isCalendarCreateEventTool(toolCall.toolName, appName)) {
+                const instruction = (typeof args.instruction === 'string' ? args.instruction : typeof (args as { input?: string }).input === 'string' ? (args as { input: string }).input : '').trim()
+                const extracted = instruction
+                  ? await extractCalendarEventFromInstruction(instruction, {
+                      timezone: userTimeContext.timezone,
+                      country: userTimeContext.country,
+                    })
+                  : null
+                if (extracted && !extracted.isRecurring) {
+                  const createResult = await createCalendarEventViaProxy(
+                    userId,
+                    phoneNumber,
+                    {
+                      summary: extracted.summary,
+                      startDateTime: extracted.startDateTime,
+                      endDateTime: extracted.endDateTime,
+                      ...(extracted.attendees?.length && { attendees: extracted.attendees }),
                     }
+                  )
+                  if (createResult.error) {
+                    toolResultText = createResult.error
                   } else {
-                    const normalizedArgs = normalizeCalendarCreateEventInstruction(
-                      toolCall.toolName,
-                      args,
-                      appName
-                    )
-                    const toolResult = await executePipedreamTool(
-                      userId,
-                      phoneNumber,
-                      toolCall.toolName,
-                      normalizedArgs,
-                      appName
-                    )
+                    const r = createResult.result
                     toolResultText =
-                      toolResult.error || toolResult.result || 'Tool executed'
+                      r == null
+                        ? 'Event created.'
+                        : typeof r === 'string'
+                          ? r
+                          : (r as { htmlLink?: string })?.htmlLink
+                            ? `Event created: ${(r as { htmlLink: string }).htmlLink}`
+                            : JSON.stringify(r)
                   }
                 } else {
                   const normalizedArgs = normalizeCalendarCreateEventInstruction(
@@ -489,16 +435,11 @@ async function processUserMessageAsync(
                     toolResult.error || toolResult.result || 'Tool executed'
                 }
               } else {
-                const normalizedArgs = normalizeCalendarCreateEventInstruction(
-                  toolCall.toolName,
-                  toolCall.args ?? {},
-                  appName
-                )
                 const toolResult = await executePipedreamTool(
                   userId,
                   phoneNumber,
                   toolCall.toolName,
-                  normalizedArgs,
+                  toolCall.args ?? {},
                   appName
                 )
                 toolResultText =
@@ -535,7 +476,9 @@ async function processUserMessageAsync(
           userName,
           toolsForAi,
           phoneNumber,
-          connectedAppNames
+          connectedAppNames,
+          userTimeContext.timezone,
+          userTimeContext.country
         )
       }
 

@@ -1,6 +1,7 @@
 import { generateText, Output } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { z } from 'zod'
+import { formatNowInTimezone } from '@/lib/context/user-context'
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const CalendarEventSchema = z.object({
@@ -8,6 +9,7 @@ const CalendarEventSchema = z.object({
   startDateTime: z.string(),
   endDateTime: z.string(),
   attendees: z.array(z.string()).optional().default([]),
+  isRecurring: z.boolean().optional().default(false),
 }).transform((data) => ({
   ...data,
   attendees: (data.attendees || []).filter((e) => typeof e === 'string' && emailRegex.test(e)).slice(0, 50),
@@ -24,17 +26,21 @@ export type ExtractedCalendarEvent = z.infer<typeof CalendarEventSchema>
  * https://developers.google.com/workspace/calendar/api/v3/reference/events/insert
  */
 export async function extractCalendarEventFromInstruction(
-  instruction: string
+  instruction: string,
+  options?: { timezone?: string; country?: string }
 ): Promise<ExtractedCalendarEvent | null> {
   try {
     if (!process.env.OPENAI_API_KEY) return null
     if (!instruction || typeof instruction !== 'string' || instruction.length > 2000) return null
 
     const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    const timezoneHint = options?.timezone
+      ? ` The user is in timezone ${options.timezone}${options.country ? ` (${options.country})` : ''}. Current date and time there: ${formatNowInTimezone(options.timezone)}. Use this for "today", "tomorrow", and any time in the instruction.`
+      : ` Today's date is ${new Date().toISOString().slice(0, 10)}.`
 
     const result = await generateText({
       model: openai('gpt-4o-mini'),
-      prompt: `Extract calendar event details from this instruction. Use the current date/time context for relative times like "tomorrow" or "next Monday". Output startDateTime and endDateTime in ISO 8601 format (include timezone offset when possible, e.g. 2026-01-27T14:00:00+00:00). If only a start time is given, set end to 1 hour after start. If the instruction mentions inviting people, list their email addresses in attendees (array of strings). Today's date is ${new Date().toISOString().slice(0, 10)}.
+      prompt: `Extract calendar event details from this instruction. Use the current date/time context for relative times like "tomorrow" or "next Monday". Output startDateTime and endDateTime in ISO 8601 format (include timezone offset when possible, e.g. 2026-01-27T14:00:00+00:00). If only a start time is given, set end to 1 hour after start. If the instruction mentions inviting people, list their email addresses in attendees (array of strings). Set isRecurring to true only if the user clearly asked for a repeating/recurring event (e.g. daily, weekly, every Monday, monthly, repeat); otherwise set isRecurring to false for a one-time event.${timezoneHint}
 
 Instruction: ${instruction.trim()}`,
       output: Output.object({
@@ -45,6 +51,7 @@ Instruction: ${instruction.trim()}`,
           attendees: z
             .array(z.string().describe('Attendee email address'))
             .describe('List of invitee emails if instruction mentions inviting people; use empty array [] if none'),
+          isRecurring: z.boolean().describe('True if user asked for a repeating event (e.g. daily, weekly); false for one-time'),
         }),
       }),
     })
@@ -55,12 +62,17 @@ Instruction: ${instruction.trim()}`,
     const startDateTime = (raw.startDateTime ?? raw.start_date_time ?? raw.start) as string | undefined
     const endDateTime = (raw.endDateTime ?? raw.end_date_time ?? raw.end) as string | undefined
     const attendees = Array.isArray(raw.attendees) ? (raw.attendees as string[]) : []
+    const isRecurring =
+      typeof raw.isRecurring === 'boolean'
+        ? raw.isRecurring
+        : raw.isRecurring === true || String(raw.isRecurring).toLowerCase() === 'true'
     if (!summary?.trim() || !startDateTime?.trim() || !endDateTime?.trim()) return null
     const parsed = CalendarEventSchema.safeParse({
       summary: summary.trim(),
       startDateTime: startDateTime.trim(),
       endDateTime: endDateTime.trim(),
       attendees,
+      isRecurring: !!isRecurring,
     })
     if (!parsed.success) return null
     return parsed.data
