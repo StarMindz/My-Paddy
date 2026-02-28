@@ -10,18 +10,20 @@ datasource db {
 }
 
 model User {
-  id               String   @id @default(uuid())
-  phoneNumber      String   @unique @map("phone_number")
-  email            String
-  name             String?
-  subscriptionTier String   @default("free") @map("subscription_tier")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                   String    @id @default(uuid())
+  phoneNumber          String    @unique @map("phone_number")
+  email                String
+  name                 String?
+  subscriptionTier     String    @default("free") @map("subscription_tier")
+  lastMorningBriefAt   DateTime? @map("last_morning_brief_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
   appConnections AppConnection[]
   subscriptions Subscription[]
   conversation   Conversation?
   memories       UserMemory[]
+  reminders      Reminder[]
 
   @@map("users")
 }
@@ -115,4 +117,25 @@ model UserMemory {
   @@index([userId])
   @@index([userId, activationBaseline])
   @@map("user_memories")
+}
+
+// Reminders: nudge the user at a specific time (standalone or before calendar event).
+// PA-style delivery; user never sees "reminder" wording.
+model Reminder {
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  content             String    // e.g. "Call the supplier", "Meeting with Sarah"
+  dueAt               DateTime  @map("due_at")   // UTC
+  timezone            String    // IANA, for confirmation text
+  status              String    @default("pending") // pending | sent | cancelled
+  createdAt           DateTime  @default(now()) @map("created_at")
+  sentAt              DateTime? @map("sent_at")
+  source              String    @default("standalone") // standalone | calendar_15min | calendar_5min
+  externalEventId      String?   @map("external_event_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, dueAt])
+  @@index([userId, status])
+  @@map("reminders")
 }

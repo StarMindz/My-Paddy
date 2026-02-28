@@ -20,6 +20,7 @@ import { extractCalendarEventFromInstruction } from '@/lib/ai/extract-calendar-e
 import { createAndSendConnectLink, searchConnectableApps } from '@/lib/connect/send-connect-link'
 import { getTimezoneFromPhone } from '@/lib/context/user-context'
 import { getMemoriesForTurn, retain, markRecalled, type MemoryItem } from '@/lib/memory'
+import { createReminder, createCalendarNudgeReminders } from '@/lib/reminders'
 import { z } from 'zod'
 
 // Allow up to 5 min with Fluid Compute enabled (Hobby max 300s). Vercel docs: fluid compute default/max 300s.
@@ -47,6 +48,24 @@ const SEARCH_CONNECTABLE_APPS_TOOL = {
   },
 }
 
+const CREATE_REMINDER_TOOL = {
+  description:
+    'Set a reminder so the user gets a WhatsApp message at that time. You have the user\'s timezone and current time; convert the time to dueAt as ISO 8601. The tool returns a factual result (e.g. "Reminder created. Due at X."). Reply to the user in your own words; do not parrot the tool result or say "reminder set".',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      content: {
+        type: 'string',
+        description:
+          'The exact message the user will receive when the reminder is delivered. Write it direct and natural. Good examples: "Don\'t forget to call John", "Time to submit the financial report", "Call the oil supplier today", "You\'re due to pick up the Jumia package."',
+      },
+      dueAt: { type: 'string', description: 'When to remind, ISO 8601 (e.g. "2026-01-28T15:00:00Z" or "2026-01-28T15:00:00+01:00"). Use user timezone.' },
+      timezone: { type: 'string', description: 'Optional. IANA timezone for display. Omit to use the user\'s timezone.' },
+    },
+    required: ['content', 'dueAt'],
+  },
+}
+
 /** Derive a short status from the first tool's description. Truncate at a full sentence or word boundary, not mid-word. Use generic text for connection tools so we don't send internal tool descriptions to the user. */
 function getStatusForToolCalls(
   toolCalls: Array<{ toolName: string }>,
@@ -56,6 +75,7 @@ function getStatusForToolCalls(
   const first = toolCalls[0]
   if (first?.toolName === 'search_connectable_apps') return 'Looking up your apps...'
   if (first?.toolName === 'send_connection_link') return 'Sending your connect link...'
+  if (first?.toolName === 'create_reminder') return 'Setting a reminder...'
   const def = first?.toolName ? tools[first.toolName] : undefined
   const desc = (def?.description || '').trim()
   if (!desc) return 'Working on it...'
@@ -310,6 +330,7 @@ async function processUserMessageAsync(
       ...mcpTools,
       search_connectable_apps: SEARCH_CONNECTABLE_APPS_TOOL,
       send_connection_link: SEND_CONNECTION_LINK_TOOL,
+      create_reminder: CREATE_REMINDER_TOOL,
     }
 
     const userTimeContext = getTimezoneFromPhone(phoneNumber)
@@ -384,6 +405,19 @@ async function processUserMessageAsync(
                   ? `Connection link sent to the user on WhatsApp.`
                   : `Failed: ${linkResult.error ?? 'Unknown error'}`
               }
+            } else if (toolCall.toolName === 'create_reminder') {
+              const content = (toolCall.args?.content ?? '').toString().trim()
+              const dueAt = (toolCall.args?.dueAt ?? '').toString().trim()
+              const timezone = (toolCall.args?.timezone ?? userTimeContext.timezone ?? 'UTC').toString().trim()
+              const reminderResult = await createReminder({
+                userId,
+                content,
+                dueAt,
+                timezone: timezone || userTimeContext.timezone || 'UTC',
+              })
+              toolResultText = reminderResult.success
+                ? reminderResult.message
+                : `Failed: ${reminderResult.error}`
             } else {
               const toolDef = mcpTools[toolCall.toolName]
               const appName = toolDef?.appName
@@ -427,6 +461,16 @@ async function processUserMessageAsync(
                     toolResultText = createResult.error
                   } else {
                     const r = createResult.result
+                    const eventId = r && typeof r === 'object' && 'id' in r ? (r as { id: string }).id : undefined
+                    waitUntil(
+                      createCalendarNudgeReminders({
+                        userId,
+                        timezone: userTimeContext.timezone,
+                        summary: extracted.summary,
+                        startDateTimeIso: extracted.startDateTime,
+                        externalEventId: eventId,
+                      })
+                    )
                     toolResultText =
                       r == null
                         ? 'Event created.'
