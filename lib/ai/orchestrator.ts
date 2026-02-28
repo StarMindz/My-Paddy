@@ -30,7 +30,8 @@ export async function processUserMessage(
   phoneNumber?: string,
   connectedAppNames?: string[], // App slugs the user has already connected (from DB).
   userTimezone?: string,
-  userCountry?: string
+  userCountry?: string,
+  memoryContext?: string
 ): Promise<{ response: string; toolCalls?: Array<{ toolCallId: string; toolName: string; args: Record<string, any> }> } | null> {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -131,7 +132,7 @@ ${toolDescriptions
 - Build tool parameters from the details the user gave. If anything is missing or unclear, ask the user before calling a tool; do not fill in or assume details.
 - Take initiative when you have enough information. If you need information, ask for it once in a single message (e.g. "What time and who should I invite?") rather than guessing.
 - For sensitive actions (e.g. sending an email, deleting something), briefly state the plan and ask for "Go ahead" before calling the tool.
-- If the user's request is ambiguous or could mean more than one thing, always ask one short clarifying question instead of guessing.`
+- If the user's request is ambiguous or could mean more than one thing, always ask one short clarifying question instead of guessing.${memoryContext && memoryContext.trim() ? `\n\n## What you know about this user\n${memoryContext.trim()}\n\nUse this to personalize replies. If the user corrects something, treat it as an update to what you know; do not contradict these facts unless they explicitly correct.` : ''}`
 
     // Message shape per Vercel AI SDK: ToolCallPart uses toolCallId, toolName, input; ToolResultPart uses toolCallId, toolName, output.
     // See @ai-sdk/provider-utils types/content-part.ts and lib/ai/VERCEL_AI_SDK_MESSAGES_AND_SAVING.md (sourced from sdk.vercel.ai docs).

@@ -21,6 +21,7 @@ model User {
   appConnections AppConnection[]
   subscriptions Subscription[]
   conversation   Conversation?
+  memories       UserMemory[]
 
   @@map("users")
 }
@@ -90,4 +91,28 @@ model Message {
 
   @@index([conversationId, createdAt])
   @@map("messages")
+}
+
+// User memory: durable facts, preferences, beliefs, relations, commitments (one row per logical slot per user).
+// embedding: stored as number[] for similarity; activation_baseline for "top by rank" query.
+model UserMemory {
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  key                 String    // logical slot (e.g. fact_employer, preference_meeting_time)
+  content             String    // one-line fact/preference text
+  type                String    // fact | preference | belief | relation | commitment | experience
+  embedding           Json?     // number[] from text-embedding-3-small (1536 dims)
+  sourceMessageId     String?   @map("source_message_id")
+  lastRecalledAt      DateTime? @map("last_recalled_at")
+  recallCount         Int       @default(0) @map("recall_count")
+  activationBaseline  Float     @default(0) @map("activation_baseline")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+  @@index([userId, activationBaseline])
+  @@map("user_memories")
 }

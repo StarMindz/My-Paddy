@@ -19,6 +19,7 @@ import {
 import { extractCalendarEventFromInstruction } from '@/lib/ai/extract-calendar-event'
 import { createAndSendConnectLink, searchConnectableApps } from '@/lib/connect/send-connect-link'
 import { getTimezoneFromPhone } from '@/lib/context/user-context'
+import { getMemoriesForTurn, retain, markRecalled, type MemoryItem } from '@/lib/memory'
 import { z } from 'zod'
 
 // Allow up to 5 min with Fluid Compute enabled (Hobby max 300s). Vercel docs: fluid compute default/max 300s.
@@ -313,6 +314,22 @@ async function processUserMessageAsync(
 
     const userTimeContext = getTimezoneFromPhone(phoneNumber)
 
+    let memoryContext = ''
+    let memoriesFromRecall: MemoryItem[] = []
+    let recalledIds: string[] = []
+    if (process.env.MEMORY_ENABLED === 'true') {
+      try {
+        const mem = await getMemoriesForTurn(userId, messageText, { tokenBudget: 800 })
+        memoryContext = mem.memoryContext
+        memoriesFromRecall = mem.memories
+        recalledIds = mem.recalledIds
+      } catch (_) {
+        memoryContext = ''
+        memoriesFromRecall = []
+        recalledIds = []
+      }
+    }
+
     try {
       // Multi-round tool loop: we run tools in the webhook (not in SDK execute) and re-call
       // processUserMessage until we get a text response. Aligned with Vercel AI SDK "forward
@@ -327,7 +344,8 @@ async function processUserMessageAsync(
         phoneNumber,
         connectedAppNames,
         userTimeContext.timezone,
-        userTimeContext.country
+        userTimeContext.country,
+        memoryContext
       )
       let round = 0
 
@@ -478,17 +496,32 @@ async function processUserMessageAsync(
           phoneNumber,
           connectedAppNames,
           userTimeContext.timezone,
-          userTimeContext.country
+          userTimeContext.country,
+          memoryContext
         )
       }
 
       if (aiResult && aiResult.response && aiResult.response.trim()) {
-        await saveAssistantMessage(
+        const savedAssistant = await saveAssistantMessage(
           conversation.id,
           aiResult.response,
           aiResult.toolCalls
         )
         await sendWhatsAppMessage(phoneNumber, aiResult.response)
+        if (process.env.MEMORY_ENABLED === 'true') {
+          waitUntil(
+            retain({
+              userId,
+              userMessage: messageText,
+              assistantMessage: aiResult.response,
+              lastMessageId: savedAssistant?.id ?? null,
+              memoriesFromRecall,
+            })
+          )
+          if (recalledIds.length > 0) {
+            waitUntil(markRecalled(userId, recalledIds))
+          }
+        }
       } else {
         console.error('[AI] No response from processUserMessage:', {
           hasResult: !!aiResult,
