@@ -13,8 +13,8 @@ export async function GET(request: NextRequest) {
   const authError = requireCronAuth(request)
   if (authError) return authError
 
-  const { delivered } = await runDeliverReminders()
+  const { delivered, deleted } = await runDeliverReminders()
   const { sent } = await runMorningBrief()
 
-  return NextResponse.json({ ok: true, delivered, morningBriefSent: sent })
+  return NextResponse.json({ ok: true, delivered, deleted, morningBriefSent: sent })
 }

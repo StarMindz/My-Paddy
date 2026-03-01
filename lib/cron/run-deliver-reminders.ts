@@ -13,10 +13,35 @@ type PrismaWithReminder = ReturnType<typeof getPrismaClient> & {
   reminder: {
     findMany: (args: object) => Promise<ReminderRow[]>
     updateMany: (args: object) => Promise<unknown>
+    deleteMany: (args: { where: { status: string; sentAt: { lt: Date } } }) => Promise<{ count: number }>
   }
 }
 
-export async function runDeliverReminders(): Promise<{ delivered: number }> {
+const SENT_REMINDER_RETENTION_DAYS = 1
+
+/** Delete sent reminders older than SENT_REMINDER_RETENTION_DAYS so the table doesn't grow indefinitely. */
+export async function deleteSentRemindersOlderThanRetention(): Promise<{ deleted: number }> {
+  const prisma = getPrismaClient() as PrismaWithReminder
+  const cutoff = new Date(Date.now() - SENT_REMINDER_RETENTION_DAYS * 24 * 60 * 60 * 1000)
+
+  const result = await prisma.reminder.deleteMany({
+    where: {
+      status: 'sent',
+      sentAt: { lt: cutoff },
+    },
+  })
+  let deleted = result.count
+
+  const prismaAny = getPrismaClient() as any
+  const nullSentResult = await prismaAny.reminder.deleteMany({
+    where: { status: 'sent', sentAt: null },
+  })
+  deleted += nullSentResult.count
+
+  return { deleted }
+}
+
+export async function runDeliverReminders(): Promise<{ delivered: number; deleted: number }> {
   const prisma = getPrismaClient() as PrismaWithReminder
   const now = new Date()
 
@@ -55,5 +80,6 @@ export async function runDeliverReminders(): Promise<{ delivered: number }> {
     })
   }
 
-  return { delivered }
+  const { deleted } = await deleteSentRemindersOlderThanRetention()
+  return { delivered, deleted }
 }
