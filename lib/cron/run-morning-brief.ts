@@ -10,6 +10,7 @@ import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
 import { getTimezoneFromPhone } from '@/lib/context/user-context'
 import { toZonedTime, fromZonedTime, formatInTimeZone } from 'date-fns-tz'
 import { fetchCalendarListViaProxy } from '@/lib/mcp/calendar-list-via-proxy'
+import { appendOutboundToConversation } from '@/lib/db/messages'
 
 type MorningBriefUser = {
   id: string
@@ -181,6 +182,12 @@ export async function runMorningBrief(): Promise<{ sent: number }> {
     if (!result.success) {
       console.error(`[cron/morning-brief] Failed to send to ${user.id}:`, result.error)
       continue
+    }
+
+    try {
+      await appendOutboundToConversation(user.id, 'morning_brief', message)
+    } catch (err) {
+      console.error(`[cron/morning-brief] Failed to append brief to conversation for ${user.id}:`, err)
     }
 
     await prisma.user.update({

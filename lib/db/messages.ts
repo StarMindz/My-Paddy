@@ -98,28 +98,32 @@ export async function getRecentMessages(
 }
 
 /**
- * Append a delivered-reminder turn to the user's conversation so the AI has context.
- * Saves: (1) a marker user message "[Reminder delivered]", (2) the assistant message with the exact text we sent.
- * When the user asks follow-ups like "What did you remind me about?", the AI sees this turn and can respond naturally.
+ * Append an outbound message (reminder or morning brief) to the user's conversation so the AI has context.
+ * Saves: (1) a marker user message, (2) the assistant message with the exact text we sent.
+ * When the user asks follow-ups like "What did you remind me about?" or "What did you say this morning?", the AI sees this turn.
  */
-export async function appendReminderToConversation(
+const OUTBOUND_MARKERS: Record<'reminder' | 'morning_brief', string> = {
+  reminder: '[Reminder delivered]',
+  morning_brief: '[Morning brief delivered]',
+}
+const OUTBOUND_FALLBACKS: Record<'reminder' | 'morning_brief', string> = {
+  reminder: 'Reminder.',
+  morning_brief: 'Good morning.',
+}
+
+export async function appendOutboundToConversation(
   userId: string,
-  reminderContent: string
+  kind: 'reminder' | 'morning_brief',
+  content: string
 ): Promise<void> {
   const conversation = await getOrCreateConversation(userId)
   const prisma = getPrismaClient() as any
+  const marker = OUTBOUND_MARKERS[kind]
+  const assistantContent = (content || '').trim() || OUTBOUND_FALLBACKS[kind]
   await prisma.message.createMany({
     data: [
-      {
-        conversationId: conversation.id,
-        role: 'user',
-        content: '[Reminder delivered]',
-      },
-      {
-        conversationId: conversation.id,
-        role: 'assistant',
-        content: (reminderContent || '').trim() || 'Reminder.',
-      },
+      { conversationId: conversation.id, role: 'user', content: marker },
+      { conversationId: conversation.id, role: 'assistant', content: assistantContent },
     ],
   })
 }
