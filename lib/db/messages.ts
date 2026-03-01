@@ -1,4 +1,5 @@
 import { getPrismaClient } from './client'
+import { getOrCreateConversation } from './conversations'
 
 // Message type - matches Prisma schema
 // Will be available from @prisma/client after running: npm run db:generate
@@ -93,6 +94,33 @@ export async function getRecentMessages(
       createdAt: 'asc'
     },
     take: limit
+  })
+}
+
+/**
+ * Append a delivered-reminder turn to the user's conversation so the AI has context.
+ * Saves: (1) a marker user message "[Reminder delivered]", (2) the assistant message with the exact text we sent.
+ * When the user asks follow-ups like "What did you remind me about?", the AI sees this turn and can respond naturally.
+ */
+export async function appendReminderToConversation(
+  userId: string,
+  reminderContent: string
+): Promise<void> {
+  const conversation = await getOrCreateConversation(userId)
+  const prisma = getPrismaClient() as any
+  await prisma.message.createMany({
+    data: [
+      {
+        conversationId: conversation.id,
+        role: 'user',
+        content: '[Reminder delivered]',
+      },
+      {
+        conversationId: conversation.id,
+        role: 'assistant',
+        content: (reminderContent || '').trim() || 'Reminder.',
+      },
+    ],
   })
 }
 

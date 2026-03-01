@@ -6,6 +6,7 @@
 import { getPrismaClient } from '@/lib/db/client'
 import { getUserById } from '@/lib/db/users'
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
+import { appendReminderToConversation } from '@/lib/db/messages'
 
 type ReminderRow = { id: string; userId: string; content: string }
 type PrismaWithReminder = ReturnType<typeof getPrismaClient> & {
@@ -41,6 +42,11 @@ export async function runDeliverReminders(): Promise<{ delivered: number }> {
         continue
       }
       delivered++
+      try {
+        await appendReminderToConversation(r.userId, message)
+      } catch (err) {
+        console.error(`[cron/deliver-reminders] Failed to append reminder to conversation for ${r.userId}:`, err)
+      }
     }
 
     await prisma.reminder.updateMany({
