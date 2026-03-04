@@ -1,6 +1,6 @@
 import { getPipedreamClient } from '@/lib/mcp/pipedream-auth'
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
-import { getGoogleAuthUrl } from '@/lib/google/oauth'
+import { getGoogleAuthUrl, getGoogleCalendarAuthUrl } from '@/lib/google/oauth'
 import { isPipedreamEnabled } from '@/lib/config/integrations'
 
 /**
@@ -56,6 +56,18 @@ export async function createAndSendConnectLink(
         phoneNumber,
         `🔗 Connect your Gmail account:\n\n${authUrl}\n\n` +
           `Tap this link to securely connect your Gmail. Once you're done, come back here and tell me what you want to do (e.g. "send an email to ...").`
+      )
+      return { success: true }
+    }
+
+    // Native Google Calendar OAuth when Pipedream is disabled.
+    if (!pipedreamOn && slug === 'google-calendar') {
+      const redirectUri = `${baseUrl}/api/connect/google-calendar/callback`
+      const authUrl = getGoogleCalendarAuthUrl(redirectUri, phoneNumber)
+      await sendWhatsAppMessage(
+        phoneNumber,
+        `🔗 Connect your Google Calendar:\n\n${authUrl}\n\n` +
+          `Tap this link to securely connect your Google Calendar. Once you're done, come back here and tell me what you want to do (e.g. "create an event for tomorrow at 3pm").`
       )
       return { success: true }
     }

@@ -13,6 +13,11 @@ const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.settings.basic',
 ].join(' ')
 
+const GOOGLE_CALENDAR_SCOPES = [
+  // Read/write access to calendar events (list, create, update, delete)
+  'https://www.googleapis.com/auth/calendar.events',
+].join(' ')
+
 export function getGoogleAuthUrl(redirectUri: string, state: string): string {
   const clientId = process.env.GOOGLE_CLIENT_ID
   if (!clientId) {
@@ -23,6 +28,23 @@ export function getGoogleAuthUrl(redirectUri: string, state: string): string {
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: GMAIL_SCOPES,
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  })
+  return `${GOOGLE_AUTH_URL}?${params.toString()}`
+}
+
+export function getGoogleCalendarAuthUrl(redirectUri: string, state: string): string {
+  const clientId = process.env.GOOGLE_CLIENT_ID
+  if (!clientId) {
+    throw new Error('GOOGLE_CLIENT_ID environment variable is required')
+  }
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: GOOGLE_CALENDAR_SCOPES,
     access_type: 'offline',
     prompt: 'consent',
     state,

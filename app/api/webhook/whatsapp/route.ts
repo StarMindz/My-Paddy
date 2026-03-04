@@ -38,6 +38,7 @@ import {
   getSendAsAlias,
   updatePrimarySignature,
 } from '@/lib/google/gmail'
+import { createCalendarEvent, listCalendarEvents } from '@/lib/google/calendar'
 import { z } from 'zod'
 
 // Allow up to 5 min with Fluid Compute enabled (Hobby max 300s). Vercel docs: fluid compute default/max 300s.
@@ -285,6 +286,77 @@ const GMAIL_TOOLS: Record<string, { description: string; inputSchema: any }> = {
         },
       },
       required: ['sendAsEmail'],
+    },
+  },
+}
+
+const CALENDAR_TOOLS: Record<string, { description: string; inputSchema: any }> = {
+  calendar_create_event: {
+    description:
+      'Create a one-time Google Calendar event on the user’s primary calendar. Use when the user clearly gives you a title and time range.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        summary: {
+          type: 'string',
+          description: 'Short title for the event (e.g. "Team meeting").',
+        },
+        startDateTime: {
+          type: 'string',
+          description: 'Event start date-time in ISO 8601 (e.g. "2026-01-28T15:00:00+01:00").',
+        },
+        endDateTime: {
+          type: 'string',
+          description: 'Event end date-time in ISO 8601. Must be after startDateTime.',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional longer description / agenda for the event.',
+        },
+        location: {
+          type: 'string',
+          description: 'Optional event location.',
+        },
+        attendees: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional list of attendee email addresses.',
+        },
+        reminderMinutes: {
+          type: 'number',
+          description:
+            'Optional. Minutes before the event to show a reminder (e.g. 15 = 15 min before). Use for "remind me before" or reminder-style events.',
+        },
+      },
+      required: ['summary', 'startDateTime', 'endDateTime'],
+    },
+  },
+  calendar_list_events: {
+    description:
+      'List upcoming Google Calendar events for the user (primary calendar). Defaults to now through the next 30 days if no time range is provided.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        timeMin: {
+          type: 'string',
+          description:
+            'Optional start of the time range in ISO 8601 (e.g. "2026-01-28T00:00:00+01:00"). Defaults to now.',
+        },
+        timeMax: {
+          type: 'string',
+          description:
+            'Optional end of the time range in ISO 8601. Defaults to 30 days after timeMin.',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Maximum number of events to return (default 50, max 250).',
+        },
+        calendarId: {
+          type: 'string',
+          description: 'Optional calendar ID. Defaults to "primary".',
+        },
+      },
+      required: [],
     },
   },
 }
@@ -592,6 +664,7 @@ async function processUserMessageAsync(
         }
       : {
           ...GMAIL_TOOLS,
+          ...CALENDAR_TOOLS,
           send_connection_link: SEND_CONNECTION_LINK_TOOL,
           create_reminder: CREATE_REMINDER_TOOL,
         }
@@ -859,6 +932,61 @@ async function processUserMessageAsync(
                   ? result.error
                   : JSON.stringify({ alias: result.alias })
               }
+            } else if (toolCall.toolName === 'calendar_create_event') {
+              const summary = (toolCall.args?.summary ?? '').toString().trim()
+              const startDateTime = (toolCall.args?.startDateTime ?? '').toString().trim()
+              const endDateTime = (toolCall.args?.endDateTime ?? '').toString().trim()
+              const description = (toolCall.args?.description ?? '').toString().trim()
+              const location = (toolCall.args?.location ?? '').toString().trim()
+              const attendeesRaw = toolCall.args?.attendees
+              const attendees =
+                Array.isArray(attendeesRaw)
+                  ? (attendeesRaw as unknown[])
+                      .map((v) => v?.toString().trim())
+                      .filter((v) => !!v)
+                  : []
+              const reminderMinutesRaw = toolCall.args?.reminderMinutes
+              const reminderMinutes =
+                typeof reminderMinutesRaw === 'number' && reminderMinutesRaw >= 0
+                  ? reminderMinutesRaw
+                  : undefined
+              if (!summary || !startDateTime || !endDateTime) {
+                toolResultText =
+                  'Missing required fields for calendar_create_event. Required: summary, startDateTime, endDateTime.'
+              } else {
+                const result = await createCalendarEvent(userId, {
+                  summary,
+                  startDateTime,
+                  endDateTime,
+                  ...(description && { description }),
+                  ...(location && { location }),
+                  ...(attendees.length > 0 && { attendees: attendees as string[] }),
+                  ...(reminderMinutes != null && { reminderMinutes }),
+                })
+                toolResultText = result.error
+                  ? result.error
+                  : `Calendar event created${result.htmlLink ? `: ${result.htmlLink}` : '.'}`
+              }
+            } else if (toolCall.toolName === 'calendar_list_events') {
+              const timeMin = (toolCall.args?.timeMin ?? '').toString().trim() || undefined
+              const timeMax = (toolCall.args?.timeMax ?? '').toString().trim() || undefined
+              const maxResultsRaw = toolCall.args?.maxResults
+              const maxResults =
+                typeof maxResultsRaw === 'number'
+                  ? maxResultsRaw
+                  : maxResultsRaw
+                  ? Number.parseInt(maxResultsRaw.toString(), 10) || undefined
+                  : undefined
+              const calendarId = (toolCall.args?.calendarId ?? '').toString().trim() || undefined
+              const result = await listCalendarEvents(userId, {
+                timeMin,
+                timeMax,
+                maxResults,
+                calendarId,
+              })
+              toolResultText = result.error
+                ? result.error
+                : JSON.stringify({ events: result.events ?? [] })
             } else {
               const toolDef = mcpTools[toolCall.toolName]
               const appName = toolDef?.appName
