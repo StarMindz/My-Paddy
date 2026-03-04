@@ -1,5 +1,7 @@
 import { getPipedreamClient } from '@/lib/mcp/pipedream-auth'
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp/client'
+import { getGoogleAuthUrl } from '@/lib/google/oauth'
+import { isPipedreamEnabled } from '@/lib/config/integrations'
 
 /**
  * Search Pipedream Connect apps by query.
@@ -25,9 +27,12 @@ export async function searchConnectableApps(
 }
 
 /**
- * Create a Pipedream Connect Link and send it to the user via WhatsApp.
- * Expects a concrete app slug (e.g. "gmail", "google-calendar") chosen from
- * real Pipedream apps (e.g. via searchConnectableApps). No slug guessing here.
+ * Create a Connect Link and send it to the user via WhatsApp.
+ *
+ * - When Pipedream is enabled (PIPEDREAM_STATE === 'true'), this always creates
+ *   a Pipedream Connect link for the requested app slug.
+ * - When Pipedream is disabled, Gmail uses our native Google OAuth flow instead
+ *   so we can rely on our own tokens and tools.
  */
 export async function createAndSendConnectLink(
   phoneNumber: string,
@@ -36,14 +41,31 @@ export async function createAndSendConnectLink(
   try {
     const slug = (appSlug || '').trim() || 'gmail'
     const displayName = slug
-
-    const pipedreamClient = getPipedreamClient()
+    const pipedreamOn = isPipedreamEnabled()
     const baseUrl =
       process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null)
-    const webhookUri = baseUrl ? `${baseUrl}/api/connect/link` : undefined
+    if (!baseUrl) {
+      throw new Error('NEXT_PUBLIC_APP_URL or VERCEL_URL must be set')
+    }
+
+    // Native Gmail OAuth when Pipedream is disabled.
+    if (!pipedreamOn && slug === 'gmail') {
+      const redirectUri = `${baseUrl}/api/connect/google/callback`
+      const authUrl = getGoogleAuthUrl(redirectUri, phoneNumber)
+      await sendWhatsAppMessage(
+        phoneNumber,
+        `🔗 Connect your Gmail account:\n\n${authUrl}\n\n` +
+          `Tap this link to securely connect your Gmail. Once you're done, come back here and tell me what you want to do (e.g. "send an email to ...").`
+      )
+      return { success: true }
+    }
+
+    // Default: Pipedream Connect link (all apps when enabled, and Gmail when in Pipedream mode).
+    const pipedreamClient = getPipedreamClient()
+    const webhookUri = `${baseUrl}/api/connect/link`
     const tokenResponse = await pipedreamClient.createConnectToken({
       external_user_id: phoneNumber,
-      ...(webhookUri && { webhook_uri: webhookUri }),
+      webhook_uri: webhookUri,
     } as { external_user_id: string; webhook_uri?: string })
     const connectLink = `${tokenResponse.connect_link_url}&app=${encodeURIComponent(slug)}`
     await sendWhatsAppMessage(

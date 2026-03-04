@@ -21,6 +21,23 @@ import { createAndSendConnectLink, searchConnectableApps } from '@/lib/connect/s
 import { getTimezoneFromPhone } from '@/lib/context/user-context'
 import { getMemoriesForTurn, retain, markRecalled, type MemoryItem } from '@/lib/memory'
 import { createReminder, createCalendarNudgeReminders } from '@/lib/reminders'
+import { getAppConnection } from '@/lib/db/app-connections'
+import { isPipedreamEnabled } from '@/lib/config/integrations'
+import {
+  sendEmail,
+  createDraft,
+  listMessages,
+  listLabels,
+  createLabel,
+  archiveMessage,
+  deleteMessage,
+  addLabelsToMessage,
+  removeLabelsFromMessage,
+  listThreadMessages,
+  listSendAsAliases,
+  getSendAsAlias,
+  updatePrimarySignature,
+} from '@/lib/google/gmail'
 import { z } from 'zod'
 
 // Allow up to 5 min with Fluid Compute enabled (Hobby max 300s). Vercel docs: fluid compute default/max 300s.
@@ -45,6 +62,230 @@ const SEARCH_CONNECTABLE_APPS_TOOL = {
       },
     },
     required: ['query'],
+  },
+}
+
+const GMAIL_TOOLS: Record<string, { description: string; inputSchema: any }> = {
+  gmail_send_email: {
+    description:
+      'Send an email from the user via Gmail. Use when the user clearly asks you to send an email and has already confirmed the final To, Subject, and Body.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description: 'Recipient email address (e.g. "user@example.com").',
+        },
+        subject: {
+          type: 'string',
+          description: 'Short subject line for the email.',
+        },
+        body: {
+          type: 'string',
+          description: 'Plain-text body of the email.',
+        },
+        cc: {
+          type: 'string',
+          description: 'Optional CC recipients as a comma-separated list.',
+        },
+        bcc: {
+          type: 'string',
+          description: 'Optional BCC recipients as a comma-separated list.',
+        },
+      },
+      required: ['to', 'subject', 'body'],
+    },
+  },
+  gmail_create_draft: {
+    description:
+      'Create an email draft in Gmail without sending it. Use when the user wants to review or send the email later.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description: 'Recipient email address (e.g. "user@example.com").',
+        },
+        subject: {
+          type: 'string',
+          description: 'Short subject line for the email.',
+        },
+        body: {
+          type: 'string',
+          description: 'Plain-text body of the email.',
+        },
+        cc: {
+          type: 'string',
+          description: 'Optional CC recipients as a comma-separated list.',
+        },
+        bcc: {
+          type: 'string',
+          description: 'Optional BCC recipients as a comma-separated list.',
+        },
+      },
+      required: ['to', 'subject', 'body'],
+    },
+  },
+  gmail_find_email: {
+    description:
+      'Search the user’s Gmail inbox for messages matching a Gmail search query (e.g. from:, subject:, has:attachment). Use this when the user asks you to find or reference an existing email.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Gmail search query string (e.g. "from:john@example.com subject:invoice").',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Maximum number of messages to return (default 20, max 100).',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  gmail_list_labels: {
+    description:
+      'List all labels in the user’s Gmail account. Use when you need to know which labels exist before adding/removing them on messages.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  gmail_create_label: {
+    description:
+      'Create a new Gmail label. Use when the user wants a new label created for organizing email.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Name of the Gmail label to create.',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  gmail_archive_email: {
+    description:
+      'Archive a Gmail message (remove it from the Inbox but keep it in All Mail).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        messageId: {
+          type: 'string',
+          description: 'Gmail message ID to archive.',
+        },
+      },
+      required: ['messageId'],
+    },
+  },
+  gmail_delete_email: {
+    description:
+      'Permanently delete a Gmail message. Use only when the user clearly asks to delete.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        messageId: {
+          type: 'string',
+          description: 'Gmail message ID to delete.',
+        },
+      },
+      required: ['messageId'],
+    },
+  },
+  gmail_add_label_to_email: {
+    description:
+      'Add one or more Gmail labels to a specific message. Use existing labels from gmail_list_labels or create them with gmail_create_label first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        messageId: {
+          type: 'string',
+          description: 'Gmail message ID to label.',
+        },
+        labelIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Array of Gmail label IDs to add to the message (not names).',
+        },
+      },
+      required: ['messageId', 'labelIds'],
+    },
+  },
+  gmail_remove_label_from_email: {
+    description:
+      'Remove one or more Gmail labels from a specific message using label IDs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        messageId: {
+          type: 'string',
+          description: 'Gmail message ID to modify.',
+        },
+        labelIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Array of Gmail label IDs to remove from the message (not names).',
+        },
+      },
+      required: ['messageId', 'labelIds'],
+    },
+  },
+  gmail_list_thread_messages: {
+    description:
+      'List all messages in a Gmail thread. Use when the user wants to see or act on an entire conversation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        threadId: {
+          type: 'string',
+          description: 'Gmail thread ID to list messages for.',
+        },
+      },
+      required: ['threadId'],
+    },
+  },
+  gmail_update_primary_signature: {
+    description:
+      'Update the signature for the user’s primary Gmail send-as address. Use when the user asks you to change their default email signature.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        signature: {
+          type: 'string',
+          description: 'New HTML or plain-text signature to set for the primary address.',
+        },
+      },
+      required: ['signature'],
+    },
+  },
+  gmail_list_send_as_aliases: {
+    description:
+      'List all Gmail send-as aliases for the user (addresses they can send from) including which is primary/default.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  gmail_get_send_as_alias: {
+    description:
+      'Get details for a specific Gmail send-as alias (e.g. a particular email address).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sendAsEmail: {
+          type: 'string',
+          description: 'The exact email address of the send-as alias to fetch.',
+        },
+      },
+      required: ['sendAsEmail'],
+    },
   },
 }
 
@@ -311,27 +552,49 @@ async function processUserMessageAsync(
     // Save user message to database
     await saveUserMessage(conversation.id, messageText)
     
-    // Initialize Pipedream MCP and get tools
-    let mcpTools: Record<string, any>
-    let cleanupMCP: () => Promise<void>
-    let connectedAppNames: string[]
-    try {
-      const mcp = await initializePipedreamMCP(userId, phoneNumber)
-      mcpTools = mcp.tools
-      cleanupMCP = mcp.cleanup
-      connectedAppNames = mcp.connectedAppNames
-    } catch (mcpError) {
-      const err = mcpError instanceof Error ? mcpError : new Error(String(mcpError))
-      console.error('[AI] initializePipedreamMCP failed:', err.message)
-      if (err.stack) console.error('[AI] MCP init stack:', err.stack)
-      throw mcpError
+    // Initialize tools based on integration mode (Pipedream vs native)
+    let mcpTools: Record<string, any> = {}
+    let cleanupMCP: () => Promise<void> = async () => {}
+    let connectedAppNames: string[] = []
+    const pipedreamOn = isPipedreamEnabled()
+
+    if (pipedreamOn) {
+      // Pipedream mode: load MCP tools and use Pipedream connections as source of truth.
+      try {
+        const mcp = await initializePipedreamMCP(userId, phoneNumber)
+        mcpTools = mcp.tools
+        cleanupMCP = mcp.cleanup
+        connectedAppNames = mcp.connectedAppNames
+      } catch (mcpError) {
+        const err = mcpError instanceof Error ? mcpError : new Error(String(mcpError))
+        console.error('[AI] initializePipedreamMCP failed:', err.message)
+        if (err.stack) console.error('[AI] MCP init stack:', err.stack)
+        throw mcpError
+      }
+    } else {
+      // Native mode: only our own Google connections (no Pipedream apps).
+      try {
+        const gmailConnection = await getAppConnection(userId, 'gmail')
+        if (gmailConnection?.active) {
+          connectedAppNames.push('gmail')
+        }
+      } catch {
+        // Non-fatal; if this fails we simply won't list Gmail as connected in the prompt.
+      }
     }
-    const toolsForAi = {
-      ...mcpTools,
-      search_connectable_apps: SEARCH_CONNECTABLE_APPS_TOOL,
-      send_connection_link: SEND_CONNECTION_LINK_TOOL,
-      create_reminder: CREATE_REMINDER_TOOL,
-    }
+
+    const toolsForAi = pipedreamOn
+      ? {
+          ...mcpTools,
+          search_connectable_apps: SEARCH_CONNECTABLE_APPS_TOOL,
+          send_connection_link: SEND_CONNECTION_LINK_TOOL,
+          create_reminder: CREATE_REMINDER_TOOL,
+        }
+      : {
+          ...GMAIL_TOOLS,
+          send_connection_link: SEND_CONNECTION_LINK_TOOL,
+          create_reminder: CREATE_REMINDER_TOOL,
+        }
 
     const userTimeContext = getTimezoneFromPhone(phoneNumber)
 
@@ -418,6 +681,184 @@ async function processUserMessageAsync(
               toolResultText = reminderResult.success
                 ? reminderResult.message
                 : `Failed: ${reminderResult.error}`
+            } else if (toolCall.toolName === 'gmail_send_email') {
+              const to = (toolCall.args?.to ?? '').toString().trim()
+              const subject = (toolCall.args?.subject ?? '').toString().trim()
+              const body = (toolCall.args?.body ?? '').toString().trim()
+              const cc = (toolCall.args?.cc ?? '').toString().trim()
+              const bcc = (toolCall.args?.bcc ?? '').toString().trim()
+              if (!to || !subject || !body) {
+                toolResultText =
+                  'Missing required fields for gmail_send_email. Required: to, subject, body.'
+              } else {
+                const result = await sendEmail(userId, {
+                  to,
+                  subject,
+                  body,
+                  ...(cc && { cc }),
+                  ...(bcc && { bcc }),
+                })
+                toolResultText = result.error
+                  ? result.error
+                  : `Email sent. Message ID: ${result.id ?? 'unknown'}.`
+              }
+            } else if (toolCall.toolName === 'gmail_create_draft') {
+              const to = (toolCall.args?.to ?? '').toString().trim()
+              const subject = (toolCall.args?.subject ?? '').toString().trim()
+              const body = (toolCall.args?.body ?? '').toString().trim()
+              const cc = (toolCall.args?.cc ?? '').toString().trim()
+              const bcc = (toolCall.args?.bcc ?? '').toString().trim()
+              if (!to || !subject || !body) {
+                toolResultText =
+                  'Missing required fields for gmail_create_draft. Required: to, subject, body.'
+              } else {
+                const result = await createDraft(userId, {
+                  to,
+                  subject,
+                  body,
+                  ...(cc && { cc }),
+                  ...(bcc && { bcc }),
+                })
+                toolResultText = result.error
+                  ? result.error
+                  : `Draft created. Draft ID: ${result.id ?? 'unknown'}.`
+              }
+            } else if (toolCall.toolName === 'gmail_find_email') {
+              const query = (toolCall.args?.query ?? '').toString().trim()
+              const maxResultsRaw = toolCall.args?.maxResults
+              const maxResults =
+                typeof maxResultsRaw === 'number'
+                  ? maxResultsRaw
+                  : Number.parseInt((maxResultsRaw ?? '').toString(), 10) || 20
+              if (!query) {
+                toolResultText = 'Missing required field "query" for gmail_find_email.'
+              } else {
+                const result = await listMessages(userId, {
+                  q: query,
+                  maxResults,
+                })
+                toolResultText = result.error
+                  ? result.error
+                  : JSON.stringify({
+                      messages: result.messages ?? [],
+                      nextPageToken: result.nextPageToken ?? null,
+                    })
+              }
+            } else if (toolCall.toolName === 'gmail_list_labels') {
+              const result = await listLabels(userId)
+              toolResultText = result.error
+                ? result.error
+                : JSON.stringify({ labels: result.labels ?? [] })
+            } else if (toolCall.toolName === 'gmail_create_label') {
+              const name = (toolCall.args?.name ?? '').toString().trim()
+              if (!name) {
+                toolResultText = 'Missing required field "name" for gmail_create_label.'
+              } else {
+                const result = await createLabel(userId, name)
+                toolResultText = result.error
+                  ? result.error
+                  : JSON.stringify({ label: result.label })
+              }
+            } else if (toolCall.toolName === 'gmail_archive_email') {
+              const messageId = (toolCall.args?.messageId ?? '').toString().trim()
+              if (!messageId) {
+                toolResultText =
+                  'Missing required field "messageId" for gmail_archive_email.'
+              } else {
+                const result = await archiveMessage(userId, messageId)
+                toolResultText = result.error
+                  ? result.error
+                  : `Message archived: ${messageId}.`
+              }
+            } else if (toolCall.toolName === 'gmail_delete_email') {
+              const messageId = (toolCall.args?.messageId ?? '').toString().trim()
+              if (!messageId) {
+                toolResultText =
+                  'Missing required field "messageId" for gmail_delete_email.'
+              } else {
+                const result = await deleteMessage(userId, messageId)
+                toolResultText = result.error
+                  ? result.error
+                  : `Message deleted: ${messageId}.`
+              }
+            } else if (toolCall.toolName === 'gmail_add_label_to_email') {
+              const messageId = (toolCall.args?.messageId ?? '').toString().trim()
+              const labelIds = Array.isArray(toolCall.args?.labelIds)
+                ? (toolCall.args.labelIds as unknown[])
+                    .map((v) => v?.toString().trim())
+                    .filter((v) => !!v)
+                : []
+              if (!messageId || labelIds.length === 0) {
+                toolResultText =
+                  'Missing required fields for gmail_add_label_to_email. Required: messageId, labelIds[].'
+              } else {
+                const result = await addLabelsToMessage(
+                  userId,
+                  messageId,
+                  labelIds as string[]
+                )
+                toolResultText = result.error
+                  ? result.error
+                  : `Labels added to message ${messageId}.`
+              }
+            } else if (toolCall.toolName === 'gmail_remove_label_from_email') {
+              const messageId = (toolCall.args?.messageId ?? '').toString().trim()
+              const labelIds = Array.isArray(toolCall.args?.labelIds)
+                ? (toolCall.args.labelIds as unknown[])
+                    .map((v) => v?.toString().trim())
+                    .filter((v) => !!v)
+                : []
+              if (!messageId || labelIds.length === 0) {
+                toolResultText =
+                  'Missing required fields for gmail_remove_label_from_email. Required: messageId, labelIds[].'
+              } else {
+                const result = await removeLabelsFromMessage(
+                  userId,
+                  messageId,
+                  labelIds as string[]
+                )
+                toolResultText = result.error
+                  ? result.error
+                  : `Labels removed from message ${messageId}.`
+              }
+            } else if (toolCall.toolName === 'gmail_list_thread_messages') {
+              const threadId = (toolCall.args?.threadId ?? '').toString().trim()
+              if (!threadId) {
+                toolResultText =
+                  'Missing required field "threadId" for gmail_list_thread_messages.'
+              } else {
+                const result = await listThreadMessages(userId, threadId)
+                toolResultText = result.error
+                  ? result.error
+                  : JSON.stringify({ messages: result.messages ?? [] })
+              }
+            } else if (toolCall.toolName === 'gmail_update_primary_signature') {
+              const signature = (toolCall.args?.signature ?? '').toString()
+              if (!signature.trim()) {
+                toolResultText =
+                  'Missing required field "signature" for gmail_update_primary_signature.'
+              } else {
+                const result = await updatePrimarySignature(userId, signature)
+                toolResultText = result.error
+                  ? result.error
+                  : `Primary Gmail signature updated for ${result.alias?.sendAsEmail ?? 'primary address'}.`
+              }
+            } else if (toolCall.toolName === 'gmail_list_send_as_aliases') {
+              const result = await listSendAsAliases(userId)
+              toolResultText = result.error
+                ? result.error
+                : JSON.stringify({ aliases: result.aliases ?? [] })
+            } else if (toolCall.toolName === 'gmail_get_send_as_alias') {
+              const sendAsEmail = (toolCall.args?.sendAsEmail ?? '').toString().trim()
+              if (!sendAsEmail) {
+                toolResultText =
+                  'Missing required field "sendAsEmail" for gmail_get_send_as_alias.'
+              } else {
+                const result = await getSendAsAlias(userId, sendAsEmail)
+                toolResultText = result.error
+                  ? result.error
+                  : JSON.stringify({ alias: result.alias })
+              }
             } else {
               const toolDef = mcpTools[toolCall.toolName]
               const appName = toolDef?.appName

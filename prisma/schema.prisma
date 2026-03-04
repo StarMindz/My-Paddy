@@ -29,12 +29,15 @@ model User {
 }
 
 model AppConnection {
-  id                    String   @id @default(uuid())
-  userId                String   @map("user_id")
-  appName               String   @map("app_name")
-  pipedreamConnectionId String?  @map("pipedream_connection_id")
-  connectedAt           DateTime @default(now()) @map("connected_at")
-  active                 Boolean  @default(true)
+  id                    String    @id @default(uuid())
+  userId                String    @map("user_id")
+  appName               String    @map("app_name")
+  pipedreamConnectionId String?   @map("pipedream_connection_id")
+  refreshToken          String?   @map("refresh_token")
+  accessToken           String?   @map("access_token")
+  tokenExpiresAt        DateTime? @map("token_expires_at")
+  connectedAt           DateTime  @default(now()) @map("connected_at")
+  active                Boolean   @default(true)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
