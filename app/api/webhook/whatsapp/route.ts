@@ -484,24 +484,36 @@ export async function POST(request: NextRequest) {
       }
       try {
         const { data, mimeType } = await downloadWhatsAppMedia(mediaId)
-        const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
-        const normalizedMime = mimeType.toLowerCase().split(';')[0].trim()
-        if (!ALLOWED_IMAGE_TYPES.includes(normalizedMime)) {
-          await sendWhatsAppMessage(
-            phoneNumber,
-            "I can only use JPEG, PNG, or WebP images. Please send a photo in one of those formats."
-          )
+        const mime = mimeType.toLowerCase().split(';')[0].trim()
+        const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
+        if (!allowed.includes(mime)) {
+          await sendWhatsAppMessage(phoneNumber, "I can only use JPEG, PNG, WebP, or iPhone (HEIC) photos.")
           return NextResponse.json({ status: 'ok' })
         }
-        const MAX_IMAGE_BYTES = 5 * 1024 * 1024
-        if (data.length > MAX_IMAGE_BYTES) {
-          await sendWhatsAppMessage(
-            phoneNumber,
-            'That image is too large. Please send an image under 5 MB.'
-          )
+        if (data.length === 0) {
+          await sendWhatsAppMessage(phoneNumber, "That image came through empty. Please try again or send another photo.")
           return NextResponse.json({ status: 'ok' })
         }
-        mediaAttachment = { kind: 'image', data, mimeType: normalizedMime }
+        if (data.length > 5 * 1024 * 1024) {
+          await sendWhatsAppMessage(phoneNumber, 'That image is too large. Please send an image under 5 MB.')
+          return NextResponse.json({ status: 'ok' })
+        }
+        let imageData = data
+        let outMime = mime
+        if (mime === 'image/heic' || mime === 'image/heif') {
+          try {
+            const mod = await import('heic-convert')
+            const convert = ((mod as { default?: unknown }).default ?? mod) as (opts: { buffer: Buffer; format: string; quality?: number }) => Promise<Buffer | ArrayBuffer>
+            const out = await convert({ buffer: data, format: 'JPEG', quality: 0.9 })
+            imageData = Buffer.isBuffer(out) ? out : Buffer.from(out)
+            outMime = 'image/jpeg'
+          } catch (e) {
+            console.error('[Image] HEIC conversion failed:', e)
+            await sendWhatsAppMessage(phoneNumber, "I couldn't process that iPhone photo. Try again or send a standard photo.")
+            return NextResponse.json({ status: 'ok' })
+          }
+        }
+        mediaAttachment = { kind: 'image', data: imageData, mimeType: outMime }
         messageText = caption || "What's in this image?"
       } catch (err) {
         console.error('[Image] Download or process failed:', err)
