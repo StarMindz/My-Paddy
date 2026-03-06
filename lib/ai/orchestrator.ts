@@ -253,10 +253,13 @@ ${toolDescriptions
       }
     }
 
-    // Add current user message only if not already in history (first call: not saved yet; second call: history already has user → assistant → tool → tool)
-    const alreadyHasCurrentUser = messages.some(
-      m => m.role === 'user' && (typeof (m as { content?: string }).content === 'string' && (m as { content: string }).content === textForTurn)
-    )
+    // Add current user message only if not already in history (first call: not saved yet; second call: history already has user → assistant → tool → tool).
+    // When we have mediaAttachment we must always add the current message: history only stores text, so a previous image-with-no-caption would have the same text ("What's in this image?") and we'd wrongly skip adding the new image.
+    const alreadyHasCurrentUser =
+      !mediaAttachment &&
+      messages.some(
+        m => m.role === 'user' && (typeof (m as { content?: string }).content === 'string' && (m as { content: string }).content === textForTurn)
+      )
     if (!alreadyHasCurrentUser) {
       let userContent: string | Array<{ type: 'text'; text: string } | { type: 'image'; image: Buffer | Uint8Array; mediaType?: string }> = textForTurn
       if (mediaAttachment) {
