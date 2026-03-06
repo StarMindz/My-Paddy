@@ -3,6 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import type { ModelMessage } from '@ai-sdk/provider-utils'
 import { z } from 'zod'
 import { formatNowInTimezone } from '@/lib/context/user-context'
+import type { MediaAttachment } from '@/lib/types/media-attachment'
 
 // Message type from Prisma (will be available after db:generate)
 type Message = {
@@ -31,7 +32,8 @@ export async function processUserMessage(
   connectedAppNames?: string[], // App slugs the user has already connected (from DB).
   userTimezone?: string,
   userCountry?: string,
-  memoryContext?: string
+  memoryContext?: string,
+  mediaAttachment?: MediaAttachment | null
 ): Promise<{ response: string; toolCalls?: Array<{ toolCallId: string; toolName: string; args: Record<string, any> }> } | null> {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -40,15 +42,20 @@ export async function processUserMessage(
     }
 
     // Basic input validation
-    if (!userMessage || typeof userMessage !== 'string' || userMessage.length > 1000) {
-      console.error('[AI] processUserMessage: validation failed (missing, not string, or >1000 chars)')
+    if (!userMessage || typeof userMessage !== 'string') {
+      console.error('[AI] processUserMessage: validation failed (missing or not string)')
       return null
     }
     const trimmedMessage = userMessage.trim()
-    if (!trimmedMessage) {
+    if (!mediaAttachment && trimmedMessage.length > 1000) {
+      console.error('[AI] processUserMessage: validation failed (>1000 chars)')
+      return null
+    }
+    if (!mediaAttachment && !trimmedMessage) {
       console.error('[AI] processUserMessage: validation failed (empty after trim)')
       return null
     }
+    const textForTurn = trimmedMessage || "What's in this image?"
 
     const openai = createOpenAI({
       apiKey: process.env.OPENAI_API_KEY,
@@ -248,12 +255,22 @@ ${toolDescriptions
 
     // Add current user message only if not already in history (first call: not saved yet; second call: history already has user → assistant → tool → tool)
     const alreadyHasCurrentUser = messages.some(
-      m => m.role === 'user' && (typeof (m as { content?: string }).content === 'string' && (m as { content: string }).content === trimmedMessage)
+      m => m.role === 'user' && (typeof (m as { content?: string }).content === 'string' && (m as { content: string }).content === textForTurn)
     )
     if (!alreadyHasCurrentUser) {
+      let userContent: string | Array<{ type: 'text'; text: string } | { type: 'image'; image: Buffer | Uint8Array; mediaType?: string }> = textForTurn
+      if (mediaAttachment) {
+        if (mediaAttachment.kind === 'image') {
+          userContent = [
+            { type: 'text' as const, text: textForTurn },
+            { type: 'image' as const, image: mediaAttachment.data, mediaType: mediaAttachment.mimeType }
+          ]
+        }
+        // Future: handle mediaAttachment.kind === 'video' | 'document' etc.
+      }
       messages.push({
         role: 'user',
-        content: trimmedMessage
+        content: userContent
       })
     }
 

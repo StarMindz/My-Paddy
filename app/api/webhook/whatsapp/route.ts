@@ -9,6 +9,7 @@ import { getOrCreateConversation, getConversationWithMessages } from '@/lib/db/c
 import { saveUserMessage, saveAssistantMessage, saveToolMessage } from '@/lib/db/messages'
 import { sendWhatsAppMessage, sendTypingIndicator } from '@/lib/channels/whatsapp/client'
 import { downloadWhatsAppMedia } from '@/lib/channels/whatsapp/media'
+import type { MediaAttachment } from '@/lib/types/media-attachment'
 import { extractSignupData } from '@/lib/ai/extract-signup-data'
 import { processUserMessage } from '@/lib/ai/orchestrator'
 import { initializePipedreamMCP } from '@/lib/mcp/pipedream-client'
@@ -469,10 +470,48 @@ export async function POST(request: NextRequest) {
     const phoneNumber = message.from.trim()
     const incomingMessageId: string | undefined = typeof message.id === 'string' ? message.id : undefined
 
-    // Resolve message text: from typed text or from voice message (download + transcribe)
+    // Resolve message text and optional media: from text, voice (download + transcribe), or image (download + caption).
+    // WhatsApp: when a user attaches an image to a message, the text they type is the caption (message.image.caption).
     let messageText: string
+    let mediaAttachment: MediaAttachment | null = null
     const isAudioMessage = message.type === 'audio' && message.audio?.id
-    if (isAudioMessage) {
+    const isImageMessage = message.type === 'image' && message.image?.id
+    if (isImageMessage) {
+      const mediaId = message.image.id as string
+      const caption = (message.image.caption ?? '').trim()
+      if (incomingMessageId) {
+        await sendTypingIndicator(incomingMessageId)
+      }
+      try {
+        const { data, mimeType } = await downloadWhatsAppMedia(mediaId)
+        const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+        const normalizedMime = mimeType.toLowerCase().split(';')[0].trim()
+        if (!ALLOWED_IMAGE_TYPES.includes(normalizedMime)) {
+          await sendWhatsAppMessage(
+            phoneNumber,
+            "I can only use JPEG, PNG, or WebP images. Please send a photo in one of those formats."
+          )
+          return NextResponse.json({ status: 'ok' })
+        }
+        const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+        if (data.length > MAX_IMAGE_BYTES) {
+          await sendWhatsAppMessage(
+            phoneNumber,
+            'That image is too large. Please send an image under 5 MB.'
+          )
+          return NextResponse.json({ status: 'ok' })
+        }
+        mediaAttachment = { kind: 'image', data, mimeType: normalizedMime }
+        messageText = caption || "What's in this image?"
+      } catch (err) {
+        console.error('[Image] Download or process failed:', err)
+        await sendWhatsAppMessage(
+          phoneNumber,
+          "I couldn't load that image. Please try again or send a text message."
+        )
+        return NextResponse.json({ status: 'ok' })
+      }
+    } else if (isAudioMessage) {
       const mediaId = message.audio.id as string
       if (incomingMessageId) {
         await sendTypingIndicator(incomingMessageId)
@@ -638,7 +677,8 @@ export async function POST(request: NextRequest) {
         phoneNumber,
         messageText,
         incomingMessageId,
-        user.name || undefined
+        user.name || undefined,
+        mediaAttachment
       ))
     }
 
@@ -662,7 +702,8 @@ async function processUserMessageAsync(
   phoneNumber: string,
   messageText: string,
   incomingMessageId: string | undefined,
-  userName?: string
+  userName?: string,
+  mediaAttachment?: MediaAttachment | null
 ): Promise<void> {
   try {
     // Show typing indicator while we process the message
@@ -677,7 +718,7 @@ async function processUserMessageAsync(
     const conversationWithHistory = await getConversationWithMessages(userId, 20)
     const messageHistory = conversationWithHistory?.messages || []
     
-    // Save user message to database
+    // Save user message to database (text only; image is not stored in history)
     await saveUserMessage(conversation.id, messageText)
     
     // Initialize tools based on integration mode (Pipedream vs native)
@@ -758,7 +799,8 @@ async function processUserMessageAsync(
         connectedAppNames,
         userTimeContext.timezone,
         userTimeContext.country,
-        memoryContext
+        memoryContext,
+        mediaAttachment ?? undefined
       )
       let round = 0
 
@@ -1166,7 +1208,8 @@ async function processUserMessageAsync(
           connectedAppNames,
           userTimeContext.timezone,
           userTimeContext.country,
-          memoryContext
+          memoryContext,
+          undefined // no media on tool-round re-calls; history has text only
         )
       }
 
