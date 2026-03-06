@@ -476,6 +476,10 @@ export async function POST(request: NextRequest) {
     let mediaAttachment: MediaAttachment | null = null
     const isAudioMessage = message.type === 'audio' && message.audio?.id
     const isImageMessage = message.type === 'image' && message.image?.id
+    // Log actual webhook shape for media (no assumptions). When debugging iPhone camera: check message.type and what we get from Meta after download.
+    if (message.type === 'image' || message.type === 'document' || message.type === 'audio') {
+      console.info('[WhatsApp webhook] message.type=', message.type, 'image?.id=', message.image?.id, 'document?.id=', message.document?.id, 'audio?.id=', message.audio?.id)
+    }
     if (isImageMessage) {
       const mediaId = message.image.id as string
       const caption = (message.image.caption ?? '').trim()
@@ -485,6 +489,7 @@ export async function POST(request: NextRequest) {
       try {
         const { data, mimeType } = await downloadWhatsAppMedia(mediaId)
         const mime = mimeType.toLowerCase().split(';')[0].trim()
+        console.info('[WhatsApp image] after download: mimeType=', mimeType, 'mime(normalized)=', mime, 'bytes=', data.length)
         const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
         if (!allowed.includes(mime)) {
           await sendWhatsAppMessage(phoneNumber, "I can only use JPEG, PNG, WebP, or iPhone (HEIC) photos.")
