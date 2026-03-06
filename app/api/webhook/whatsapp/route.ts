@@ -474,7 +474,9 @@ export async function POST(request: NextRequest) {
     const isAudioMessage = message.type === 'audio' && message.audio?.id
     if (isAudioMessage) {
       const mediaId = message.audio.id as string
-      await sendWhatsAppMessage(phoneNumber, 'Processing your voice message...')
+      if (incomingMessageId) {
+        await sendTypingIndicator(incomingMessageId)
+      }
       try {
         const { data } = await downloadWhatsAppMedia(mediaId)
         const MAX_AUDIO_BYTES = 25 * 1024 * 1024
