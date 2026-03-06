@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { waitUntil } from '@vercel/functions'
+import { experimental_transcribe as transcribe } from 'ai'
+import { createOpenAI } from '@ai-sdk/openai'
 import { getUserByPhone } from '@/lib/db/users'
 import { getSignupState, setSignupState, clearSignupState } from '@/lib/db/signup-states'
 import { createUser } from '@/lib/db/users'
 import { getOrCreateConversation, getConversationWithMessages } from '@/lib/db/conversations'
 import { saveUserMessage, saveAssistantMessage, saveToolMessage } from '@/lib/db/messages'
 import { sendWhatsAppMessage, sendTypingIndicator } from '@/lib/channels/whatsapp/client'
+import { downloadWhatsAppMedia } from '@/lib/channels/whatsapp/media'
 import { extractSignupData } from '@/lib/ai/extract-signup-data'
 import { processUserMessage } from '@/lib/ai/orchestrator'
 import { initializePipedreamMCP } from '@/lib/mcp/pipedream-client'
@@ -466,8 +469,59 @@ export async function POST(request: NextRequest) {
     const phoneNumber = message.from.trim()
     const incomingMessageId: string | undefined = typeof message.id === 'string' ? message.id : undefined
 
+    // Resolve message text: from typed text or from voice message (download + transcribe)
+    let messageText: string
+    const isAudioMessage = message.type === 'audio' && message.audio?.id
+    if (isAudioMessage) {
+      const mediaId = message.audio.id as string
+      await sendWhatsAppMessage(phoneNumber, 'Processing your voice message...')
+      try {
+        const { data } = await downloadWhatsAppMedia(mediaId)
+        const MAX_AUDIO_BYTES = 25 * 1024 * 1024
+        if (data.length > MAX_AUDIO_BYTES) {
+          await sendWhatsAppMessage(
+            phoneNumber,
+            'Your voice message is too long. Please keep it under 2 minutes or send a text message.'
+          )
+          return NextResponse.json({ status: 'ok' })
+        }
+        const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY })
+        const transcript = await transcribe({
+          model: openai.transcription('gpt-4o-transcribe'),
+          audio: data,
+          abortSignal: AbortSignal.timeout(15000),
+        })
+        messageText = (transcript.text ?? '').trim()
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err))
+        if (error.name === 'AI_NoTranscriptGeneratedError') {
+          console.error('[Voice] No transcript generated:', (err as { cause?: unknown }).cause)
+        } else {
+          console.error('[Voice] Transcribe or download failed:', error.message)
+        }
+        await sendWhatsAppMessage(
+          phoneNumber,
+          "I couldn't process your voice message. Please try again or type your message."
+        )
+        return NextResponse.json({ status: 'ok' })
+      }
+      if (!messageText) {
+        await sendWhatsAppMessage(
+          phoneNumber,
+          "I couldn't make out what you said. Could you type it or try again in a short voice message?"
+        )
+        return NextResponse.json({ status: 'ok' })
+      }
+    } else {
+      messageText = (message.text?.body ?? '').trim()
+    }
+
+    if (!messageText) {
+      await sendWhatsAppMessage(phoneNumber, "Send a text or voice message and I'll help.")
+      return NextResponse.json({ status: 'ok' })
+    }
+
     // Validate message length (prevent DoS)
-    const messageText = (message.text?.body || '').trim()
     if (messageText.length > 1000) {
       await sendWhatsAppMessage(
         phoneNumber,
